@@ -1,0 +1,338 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.UI;
+
+/// <summary>
+/// Drives the visitor journey on the drawing station:
+/// Welcome (Touch to Explore) -> Register (name + employee ID) -> Draw (My Cyber Pledge) -> Thank You -> back to Welcome.
+/// Screens are scene objects built by Cyber Pledge Wall/Rebuild Drawing UI; this only animates and wires them.
+/// </summary>
+public class DrawingFlow : MonoBehaviour
+{
+    public enum Step { Welcome = 0, Register = 1, Draw = 2, Thanks = 3 }
+
+    [Header("Screens (indexed by Step)")]
+    [SerializeField] private CanvasGroup[] screens;
+
+    [Header("Shared")]
+    [SerializeField] private RectTransform logo;
+    [SerializeField] private Vector2[] logoPositions;
+    [SerializeField] private float[] logoWidths;
+    [SerializeField] private CyberBackdrop backdrop;
+    [SerializeField] private DrawingAppController network;
+    [SerializeField] private DrawingCanvas drawing;
+
+    [Header("Controls")]
+    [SerializeField] private Button startButton;
+    [SerializeField] private Button registerButton;
+    [SerializeField] private Button sendButton;
+    [SerializeField] private Button clearButton;
+    [SerializeField] private Button undoButton;
+    [SerializeField] private CyberField nameField;
+    [SerializeField] private CyberField employeeField;
+    [SerializeField] private RectTransform drawPanel;
+    [SerializeField] private RectTransform thanksPanel;
+    [SerializeField] private RectTransform thanksText;
+
+    [Header("Timing")]
+    [SerializeField] private float thanksSeconds = 5f;
+    [SerializeField] private float registerIdleSeconds = 90f;
+    [SerializeField] private float drawIdleSeconds = 240f;
+
+    [Header("Pen")]
+    [SerializeField] private Color ink = new Color(0.03f, 0.03f, 0.06f, 1f);
+    [SerializeField] private float penSize = 3.2f;
+
+    private const float LogoAspect = 291f / 1214f;
+
+    private readonly Dictionary<RectTransform, Vector2> restPositions = new Dictionary<RectTransform, Vector2>();
+    private Step current = Step.Welcome;
+    private bool transitioning;
+    private float lastActivity;
+    private Coroutine logoRoutine;
+
+    private void Awake()
+    {
+        if (drawing == null)
+            drawing = FindAnyObjectByType<DrawingCanvas>();
+        if (network == null)
+            network = FindAnyObjectByType<DrawingAppController>();
+
+        foreach (CanvasGroup screen in screens)
+        {
+            foreach (Transform child in screen.transform)
+                restPositions[(RectTransform)child] = ((RectTransform)child).anchoredPosition;
+        }
+
+        startButton.onClick.AddListener(() => GoTo(Step.Register));
+        registerButton.onClick.AddListener(SubmitRegistration);
+        sendButton.onClick.AddListener(SendPledge);
+        if (clearButton != null) clearButton.onClick.AddListener(() => drawing.Clear());
+        if (undoButton != null) undoButton.onClick.AddListener(() => drawing.Undo());
+
+        nameField.Input.onSubmit.AddListener(_ => employeeField.Input.ActivateInputField());
+        employeeField.Input.onSubmit.AddListener(_ => SubmitRegistration());
+
+        drawing.Tool = BrushTool.Pen;
+        drawing.BrushColor = ink;
+        drawing.BrushSize = penSize;
+    }
+
+    private void Start()
+    {
+        for (int i = 0; i < screens.Length; i++)
+            SetScreenActive(screens[i], false);
+
+        SetLogo(Step.Welcome, false);
+        backdrop.SetTitleHero(true, 0.01f);
+        StartCoroutine(Reveal(Step.Welcome, 0.9f));
+        lastActivity = Time.unscaledTime;
+    }
+
+    private void Update()
+    {
+        if (undoButton != null)
+            undoButton.interactable = drawing.CanUndo;
+
+        if (IsPressed())
+            lastActivity = Time.unscaledTime;
+
+        float idle = Time.unscaledTime - lastActivity;
+        if (!transitioning && ((current == Step.Register && idle > registerIdleSeconds) ||
+                               (current == Step.Draw && idle > drawIdleSeconds)))
+            ResetToWelcome();
+    }
+
+    private static bool IsPressed()
+    {
+        if (Pointer.current != null && Pointer.current.press.isPressed)
+            return true;
+        return Keyboard.current != null && Keyboard.current.anyKey.isPressed;
+    }
+
+    // ---- actions -----------------------------------------------------------------------------
+
+    private void SubmitRegistration()
+    {
+        if (transitioning || current != Step.Register)
+            return;
+
+        bool nameOk = !string.IsNullOrWhiteSpace(nameField.Input.text);
+        bool idOk = !string.IsNullOrWhiteSpace(employeeField.Input.text);
+        if (!nameOk) nameField.Reject();
+        if (!idOk) employeeField.Reject();
+        if (!nameOk || !idOk)
+        {
+            (nameOk ? employeeField : nameField).Input.ActivateInputField();
+            return;
+        }
+
+        GoTo(Step.Draw);
+    }
+
+    private void SendPledge()
+    {
+        if (transitioning || current != Step.Draw)
+            return;
+
+        if (!drawing.HasInk)
+        {
+            StartCoroutine(Nudge(drawPanel));
+            return;
+        }
+
+        string error;
+        if (!network.TrySubmit(nameField.Input.text.Trim(), employeeField.Input.text.Trim(), out error))
+        {
+            StartCoroutine(Nudge(drawPanel));
+            return;
+        }
+
+        GoTo(Step.Thanks);
+    }
+
+    public void ResetToWelcome()
+    {
+        if (current == Step.Welcome)
+            return;
+        GoTo(Step.Welcome);
+    }
+
+    private void GoTo(Step next)
+    {
+        if (transitioning || next == current)
+            return;
+        StartCoroutine(Transition(next));
+    }
+
+    // ---- transitions -------------------------------------------------------------------------
+
+    private IEnumerator Transition(Step next)
+    {
+        transitioning = true;
+        CanvasGroup outgoing = screens[(int)current];
+        yield return Hide(outgoing);
+
+        if (next == Step.Welcome)
+        {
+            nameField.Input.text = string.Empty;
+            employeeField.Input.text = string.Empty;
+            drawing.Clear(true);
+        }
+
+        current = next;
+        backdrop.SetTitleHero(next == Step.Welcome);
+        SetLogo(next, true);
+        yield return Reveal(next, 0.55f);
+
+        lastActivity = Time.unscaledTime;
+        transitioning = false;
+
+        if (next == Step.Register)
+            nameField.Input.ActivateInputField();
+        else if (next == Step.Thanks)
+            StartCoroutine(ThanksSequence());
+    }
+
+    private IEnumerator Hide(CanvasGroup screen)
+    {
+        screen.interactable = false;
+        screen.blocksRaycasts = false;
+        var rt = (RectTransform)screen.transform;
+        yield return UITween.Run(0.32f, t =>
+        {
+            screen.alpha = 1f - t;
+            rt.localScale = Vector3.one * Mathf.Lerp(1f, 0.96f, t);
+            rt.anchoredPosition = new Vector2(0f, Mathf.Lerp(0f, 36f, t));
+        }, UITween.InCubic);
+        SetScreenActive(screen, false);
+        rt.localScale = Vector3.one;
+        rt.anchoredPosition = Vector2.zero;
+    }
+
+    private IEnumerator Reveal(Step step, float duration)
+    {
+        CanvasGroup screen = screens[(int)step];
+        SetScreenActive(screen, true);
+        screen.alpha = 1f;
+        screen.interactable = false;
+        screen.blocksRaycasts = false;
+
+        var children = new List<RectTransform>();
+        foreach (Transform child in screen.transform)
+            children.Add((RectTransform)child);
+
+        for (int i = 0; i < children.Count; i++)
+        {
+            RectTransform child = children[i];
+            Vector2 rest = restPositions[child];
+            CanvasGroup group = child.GetComponent<CanvasGroup>();
+            var button = child.GetComponent<CyberButton>();
+            float delay = i * 0.09f;
+
+            Vector2 from = rest + new Vector2(0f, -70f);
+            child.anchoredPosition = from;
+            if (group != null) group.alpha = 0f;
+            if (button != null) button.EntranceScale = 0.85f;
+            else child.localScale = Vector3.one * 0.9f;
+
+            StartCoroutine(UITween.Run(duration, t =>
+            {
+                child.anchoredPosition = Vector2.LerpUnclamped(from, rest, t);
+                float scale = Mathf.LerpUnclamped(0.88f, 1f, t);
+                if (button != null) button.EntranceScale = scale; else child.localScale = Vector3.one * scale;
+            }, UITween.OutBack, delay));
+
+            StartCoroutine(UITween.Run(duration * 0.7f, t =>
+            {
+                if (group != null) group.alpha = t;
+            }, UITween.OutCubic, delay));
+        }
+
+        yield return new WaitForSecondsRealtime(duration * 0.8f + children.Count * 0.09f);
+        screen.interactable = true;
+        screen.blocksRaycasts = true;
+
+        foreach (RectTransform child in children)
+        {
+            child.anchoredPosition = restPositions[child];
+            var button = child.GetComponent<CyberButton>();
+            if (button != null) button.EntranceScale = 1f; else child.localScale = Vector3.one;
+            CanvasGroup group = child.GetComponent<CanvasGroup>();
+            if (group != null) group.alpha = 1f;
+        }
+    }
+
+    private IEnumerator ThanksSequence()
+    {
+        yield return new WaitForSecondsRealtime(0.25f);
+        backdrop.Burst(Vector2.zero);
+
+        if (thanksText != null)
+        {
+            yield return UITween.Run(0.7f, t =>
+            {
+                float pulse = 1f + 0.06f * Mathf.Sin(t * Mathf.PI);
+                thanksText.localScale = Vector3.one * pulse;
+            }, x => x);
+        }
+
+        yield return new WaitForSecondsRealtime(thanksSeconds);
+        if (current == Step.Thanks)
+            GoTo(Step.Welcome);
+    }
+
+    private IEnumerator Nudge(RectTransform target)
+    {
+        if (target == null)
+            yield break;
+
+        Vector2 start = target.anchoredPosition;
+        yield return UITween.Run(0.4f, t =>
+        {
+            target.anchoredPosition = start + new Vector2(Mathf.Sin(t * 30f) * 14f * (1f - t), 0f);
+        }, x => x);
+        target.anchoredPosition = start;
+    }
+
+    // ---- logo --------------------------------------------------------------------------------
+
+    private void SetLogo(Step step, bool animate)
+    {
+        if (logo == null || logoPositions == null || logoPositions.Length <= (int)step)
+            return;
+
+        Vector2 toPos = logoPositions[(int)step];
+        float toWidth = logoWidths[(int)step];
+        if (logoRoutine != null)
+            StopCoroutine(logoRoutine);
+
+        if (!animate)
+        {
+            ApplyLogo(toPos, toWidth);
+            return;
+        }
+
+        Vector2 fromPos = logo.anchoredPosition;
+        float fromWidth = logo.sizeDelta.x;
+        logoRoutine = StartCoroutine(UITween.Run(0.8f, t =>
+        {
+            ApplyLogo(Vector2.LerpUnclamped(fromPos, toPos, t), Mathf.LerpUnclamped(fromWidth, toWidth, t));
+        }, UITween.InOutCubic));
+    }
+
+    private void ApplyLogo(Vector2 position, float width)
+    {
+        logo.anchoredPosition = position;
+        logo.sizeDelta = new Vector2(width, width * LogoAspect);
+    }
+
+    private static void SetScreenActive(CanvasGroup screen, bool active)
+    {
+        screen.gameObject.SetActive(active);
+        screen.interactable = active;
+        screen.blocksRaycasts = active;
+    }
+}
