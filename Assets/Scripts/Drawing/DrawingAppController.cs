@@ -15,6 +15,7 @@ public class DrawingAppController : MonoBehaviour
     private Coroutine waitRoutine;
 
     public bool IsConnected => NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
+    public string CurrentHost => config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
 
     private void Awake()
     {
@@ -62,6 +63,12 @@ public class DrawingAppController : MonoBehaviour
 
     private void OnDisable()
     {
+        if (subscribedAck)
+        {
+            WallReceiver.PledgeAccepted -= OnPledgeAccepted;
+            subscribedAck = false;
+        }
+
         if (NetworkManager.Singleton == null)
             return;
 
@@ -122,13 +129,57 @@ public class DrawingAppController : MonoBehaviour
         if (nm != null && nm.IsListening)
             nm.Shutdown();
 
-        SetStatus($"Could not reach wall at {ip}:{port}. Check hostAddress in {AppConfig.DrawingFileName}.");
+        SetStatus($"Could not reach wall at {ip}:{port}. Long-press the top of the screen and enter the wall PC IP.");
     }
 
-    /// <summary>Sends the visitor's name, employee ID and drawing to the wall. Returns false (with a reason) if it can't.</summary>
-    public bool TrySubmit(string visitorName, string employeeId, out string error)
+    public void ApplyHostAddress(string ip)
+    {
+        if (config == null)
+            config = AppConfig.LoadDrawing();
+
+        config.hostAddress = string.IsNullOrWhiteSpace(ip) ? "127.0.0.1" : ip.Trim();
+        AppConfig.SaveDrawing(config);
+        StartCoroutine(Reconnect());
+    }
+
+    private System.Collections.IEnumerator Reconnect()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm != null && (nm.IsListening || nm.IsConnectedClient))
+            nm.Shutdown();
+
+        float timeout = 2f;
+        float elapsed = 0f;
+        while (nm != null && nm.IsListening && elapsed < timeout)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        ConnectToWall();
+    }
+
+    private readonly System.Collections.Generic.HashSet<string> acknowledged = new System.Collections.Generic.HashSet<string>();
+    private bool subscribedAck;
+
+    private void OnPledgeAccepted(string pledgeId) => acknowledged.Add(pledgeId);
+
+    public bool IsAcknowledged(string pledgeId) => acknowledged.Remove(pledgeId);
+
+    /// <summary>
+    /// Sends the visitor's name, email ID and drawing to the wall in chunks. Returns false (with a reason)
+    /// if it can't; otherwise <paramref name="pledgeId"/> can be polled with <see cref="IsAcknowledged"/>.
+    /// </summary>
+    public bool TrySubmit(string visitorName, string emailId, out string pledgeId, out string error)
     {
         error = null;
+        pledgeId = null;
+        if (!subscribedAck)
+        {
+            WallReceiver.PledgeAccepted += OnPledgeAccepted;
+            subscribedAck = true;
+        }
+
         var nm = NetworkManager.Singleton;
         if (nm == null || !nm.IsClient || !nm.IsConnectedClient)
         {
@@ -138,16 +189,37 @@ public class DrawingAppController : MonoBehaviour
         }
 
         var receiver = WallReceiver.Instance;
+        if (receiver == null)
+            receiver = FindAnyObjectByType<WallReceiver>();
+
         if (receiver == null || !receiver.IsSpawned)
         {
-            error = "Wall receiver is not ready yet. Please try again in a moment.";
+            error = "Wall receiver is not ready yet. Wait a moment after Connected, then Send again.";
             SetStatus(error);
             return false;
         }
 
-        byte[] drawingBytes = drawingCanvas != null ? drawingCanvas.EncodeToPng() : System.Array.Empty<byte>();
-        receiver.SubmitPledgeServerRpc(visitorName, employeeId, drawingBytes);
-        SetStatus("Pledge submitted.");
+        byte[] drawingBytes = drawingCanvas != null ? drawingCanvas.EncodeForNetwork() : System.Array.Empty<byte>();
+        if (drawingBytes.Length > NetworkSession.DefaultMaxPayloadSize - 4096)
+        {
+            error = "Drawing is too large to send. Try a simpler sketch.";
+            SetStatus(error);
+            return false;
+        }
+
+        pledgeId = System.Guid.NewGuid().ToString("N");
+        int count = Mathf.Max(1, Mathf.CeilToInt(drawingBytes.Length / (float)WallReceiver.ChunkSize));
+        for (int i = 0; i < count; i++)
+        {
+            int start = i * WallReceiver.ChunkSize;
+            int length = Mathf.Min(WallReceiver.ChunkSize, drawingBytes.Length - start);
+            var chunk = new byte[Mathf.Max(0, length)];
+            if (length > 0)
+                System.Buffer.BlockCopy(drawingBytes, start, chunk, 0, length);
+            receiver.SubmitPledgeChunkServerRpc(pledgeId, i, count, visitorName, emailId, chunk);
+        }
+
+        SetStatus($"Sending pledge ({drawingBytes.Length / 1024} KB)...");
         return true;
     }
 
@@ -169,7 +241,7 @@ public class DrawingAppController : MonoBehaviour
             SetStatus($"Disconnected: {reason}");
     }
 
-    private void SetStatus(string message)
+    public void SetStatus(string message)
     {
         Debug.Log(message);
         if (statusText != null)

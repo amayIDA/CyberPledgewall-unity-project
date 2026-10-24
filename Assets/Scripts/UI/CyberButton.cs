@@ -38,7 +38,12 @@ public class CyberButton : MonoBehaviour, IPointerEnterHandler, IPointerExitHand
 
     public void OnPointerEnter(PointerEventData e) => hoverTarget = 1f;
     public void OnPointerExit(PointerEventData e) { hoverTarget = 0f; pressTarget = 0f; }
-    public void OnPointerDown(PointerEventData e) => pressTarget = 1f;
+    public void OnPointerDown(PointerEventData e)
+    {
+        pressTarget = 1f;
+        if (button != null && button.interactable)
+            UiSfx.Click();
+    }
 
     public void OnPointerUp(PointerEventData e)
     {

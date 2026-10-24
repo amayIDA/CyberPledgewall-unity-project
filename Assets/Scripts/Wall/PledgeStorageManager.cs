@@ -6,7 +6,8 @@ public class PledgeStorageManager : MonoBehaviour
 {
     public static PledgeStorageManager Instance { get; private set; }
 
-    public static string SavePath => Path.Combine(Application.persistentDataPath, "pledges.json");
+    public static string SavePath => Path.Combine(AppConfig.Directory, "pledges.json");
+    public static string ImagesDirectory => Path.Combine(AppConfig.Directory, "Pledges");
 
     private void Awake()
     {
@@ -25,13 +26,13 @@ public class PledgeStorageManager : MonoBehaviour
             Instance = null;
     }
 
-    public void SavePledge(string visitorName, string employeeId, byte[] imageBytes)
+    public void SavePledge(string visitorName, string emailId, byte[] imageBytes)
     {
         PledgeDatabase database = LoadPledges();
         var entry = new PledgeEntry
         {
             visitorName = visitorName ?? string.Empty,
-            employeeId = employeeId ?? string.Empty,
+            emailId = emailId ?? string.Empty,
             pledgeText = string.Empty,
             imageBase64 = imageBytes != null && imageBytes.Length > 0
                 ? Convert.ToBase64String(imageBytes)
@@ -41,6 +42,7 @@ public class PledgeStorageManager : MonoBehaviour
 
         database.pledges.Add(entry);
         WriteDatabase(database);
+        WriteImageFile(entry.timestamp, visitorName, imageBytes);
         Debug.Log($"Saved pledge to {SavePath} (count: {database.pledges.Count}).");
     }
 
@@ -48,10 +50,17 @@ public class PledgeStorageManager : MonoBehaviour
     {
         try
         {
-            if (!File.Exists(SavePath))
-                return new PledgeDatabase();
+            string path = SavePath;
+            if (!File.Exists(path))
+            {
+                string legacy = Path.Combine(Application.persistentDataPath, "pledges.json");
+                if (File.Exists(legacy))
+                    path = legacy;
+                else
+                    return new PledgeDatabase();
+            }
 
-            string json = File.ReadAllText(SavePath);
+            string json = File.ReadAllText(path);
             if (string.IsNullOrWhiteSpace(json))
                 return new PledgeDatabase();
 
@@ -60,6 +69,11 @@ public class PledgeStorageManager : MonoBehaviour
                 return new PledgeDatabase();
             if (database.pledges == null)
                 database.pledges = new System.Collections.Generic.List<PledgeEntry>();
+            foreach (var entry in database.pledges)
+            {
+                if (string.IsNullOrEmpty(entry.emailId) && !string.IsNullOrEmpty(entry.employeeId))
+                    entry.emailId = entry.employeeId;
+            }
             return database;
         }
         catch (Exception ex)
@@ -114,5 +128,28 @@ public class PledgeStorageManager : MonoBehaviour
 
         string json = JsonUtility.ToJson(database, true);
         File.WriteAllText(SavePath, json);
+    }
+
+    private static void WriteImageFile(string timestamp, string visitorName, byte[] imageBytes)
+    {
+        if (imageBytes == null || imageBytes.Length == 0)
+            return;
+
+        try
+        {
+            if (!Directory.Exists(ImagesDirectory))
+                Directory.CreateDirectory(ImagesDirectory);
+
+            string safeName = string.IsNullOrWhiteSpace(visitorName) ? "pledge" : visitorName;
+            foreach (char c in Path.GetInvalidFileNameChars())
+                safeName = safeName.Replace(c, '_');
+
+            string stamp = string.IsNullOrEmpty(timestamp) ? DateTime.UtcNow.ToString("yyyyMMdd_HHmmss") : timestamp.Replace(':', '-');
+            File.WriteAllBytes(Path.Combine(ImagesDirectory, stamp + "_" + safeName + ".png"), imageBytes);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Could not write pledge PNG: {ex.Message}");
+        }
     }
 }

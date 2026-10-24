@@ -8,7 +8,7 @@ using UnityEngine;
 public class NetworkSession : MonoBehaviour
 {
     public const ushort DefaultPort = 7777;
-    public const int DefaultMaxPayloadSize = 524288;
+    public const int DefaultMaxPayloadSize = 2097152;
 
     [SerializeField] private GameObject wallReceiverPrefab;
     [SerializeField] private ushort port = DefaultPort;

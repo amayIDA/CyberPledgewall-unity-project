@@ -15,19 +15,20 @@ public enum BrushTool
 /// <summary>
 /// Freehand surface. The texture is transparent: ink is stored in the alpha channel so the panel
 /// behind it shows through here, and the wall can recolour the same PNG (white ink on navy).
+/// Strokes are smoothed and tapered like a real brush.
 /// </summary>
 [RequireComponent(typeof(RawImage))]
 public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, IPointerUpHandler
 {
-    // Matches the ~2.1:1 paper area of the design. PNG output must stay well below NetworkSession.DefaultMaxPayloadSize.
     public const int TextureWidth = 960;
     public const int TextureHeight = 448;
     private const int MaxUndo = 20;
+    private const float MinSampleSpacing = 1.15f;
+    private const float TaperDistance = 28f;
 
-    public BrushTool Tool { get; set; } = BrushTool.Pen;
+    public BrushTool Tool { get; set; } = BrushTool.Brush;
     public Color BrushColor { get; set; } = new Color(0.04f, 0.04f, 0.04f, 1f);
-    /// <summary>Base brush radius in texture pixels; each tool scales it.</summary>
-    public float BrushSize { get; set; } = 6f;
+    public float BrushSize { get; set; } = 7.5f;
     public bool CanUndo => _undo.Count > 0;
     public bool HasInk { get; private set; }
 
@@ -35,7 +36,9 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
     private Texture2D _texture;
     private Color32[] _pixels;
     private readonly List<Color32[]> _undo = new List<Color32[]>();
-    private Vector2? _last;
+    private readonly List<Vector2> _stroke = new List<Vector2>(128);
+    private Color32[] _strokeBase;
+    private bool _drawing;
 
     private void Awake()
     {
@@ -66,6 +69,8 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
 
         System.Array.Clear(_pixels, 0, _pixels.Length);
         HasInk = false;
+        _stroke.Clear();
+        _drawing = false;
         Upload();
     }
 
@@ -82,7 +87,37 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
 
     public byte[] EncodeToPng()
     {
-        return _texture == null ? System.Array.Empty<byte>() : _texture.EncodeToPNG();
+        return EncodeForNetwork();
+    }
+
+    public byte[] EncodeForNetwork()
+    {
+        if (_texture == null)
+            return System.Array.Empty<byte>();
+
+        byte[] png = _texture.EncodeToPNG();
+        const int budget = 160000;
+        if (png.Length <= budget)
+            return png;
+
+        int w = TextureWidth / 2;
+        int h = TextureHeight / 2;
+        var small = new Texture2D(w, h, TextureFormat.RGBA32, false);
+        for (int y = 0; y < h; y++)
+        {
+            int srcY = y * 2;
+            for (int x = 0; x < w; x++)
+            {
+                int srcX = x * 2;
+                int i = srcY * TextureWidth + srcX;
+                small.SetPixel(x, y, _pixels[i]);
+            }
+        }
+
+        small.Apply();
+        png = small.EncodeToPNG();
+        Object.Destroy(small);
+        return png;
     }
 
     public void OnPointerDown(PointerEventData eventData)
@@ -91,30 +126,48 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
             return;
 
         PushUndo();
-        _last = pos;
-        StampAlong(pos, pos);
+        _strokeBase = (Color32[])_pixels.Clone();
+        _stroke.Clear();
+        _stroke.Add(pos);
+        _drawing = true;
+        RasterizeStroke(false);
         Upload();
     }
 
     public void OnDrag(PointerEventData eventData)
     {
-        if (!TryGetPosition(eventData, out Vector2 pos))
-        {
-            _last = null;
+        if (!_drawing)
             return;
-        }
 
-        if (!_last.HasValue)
-            PushUndo();
+        if (!TryGetPosition(eventData, out Vector2 pos))
+            return;
 
-        StampAlong(_last ?? pos, pos);
-        _last = pos;
+        Vector2 last = _stroke[_stroke.Count - 1];
+        if ((pos - last).sqrMagnitude < MinSampleSpacing * MinSampleSpacing)
+            return;
+
+        _stroke.Add(pos);
+        RasterizeStroke(false);
         Upload();
     }
 
     public void OnPointerUp(PointerEventData eventData)
     {
-        _last = null;
+        if (!_drawing)
+            return;
+
+        if (TryGetPosition(eventData, out Vector2 pos))
+        {
+            Vector2 last = _stroke[_stroke.Count - 1];
+            if ((pos - last).sqrMagnitude > 0.25f)
+                _stroke.Add(pos);
+        }
+
+        RasterizeStroke(true);
+        Upload();
+        _stroke.Clear();
+        _strokeBase = null;
+        _drawing = false;
     }
 
     private void Upload()
@@ -155,17 +208,73 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
         return true;
     }
 
-    private void StampAlong(Vector2 from, Vector2 to)
+    private void RasterizeStroke(bool finishing)
     {
-        GetToolParams(out float radius, out float hardness, out float opacity, out bool grain, out Color32 color);
-        float step = Mathf.Max(0.75f, radius * 0.2f);
-        float distance = Vector2.Distance(from, to);
-        int count = Mathf.Max(1, Mathf.CeilToInt(distance / step));
-        for (int i = 0; i <= count; i++)
-            Stamp(Vector2.Lerp(from, to, i / (float)count), radius, hardness, opacity, grain, color);
+        if (_strokeBase != null)
+            System.Array.Copy(_strokeBase, _pixels, _pixels.Length);
+
+        if (_stroke.Count == 0)
+            return;
+
+        GetToolParams(out float baseRadius, out float hardness, out float opacity, out bool grain, out Color32 color);
+
+        float length = StrokeLength();
+        float traveled = 0f;
+        Vector2 prev = _stroke[0];
+        Stamp(prev, RadiusAt(0f, 0f, length, finishing, baseRadius), hardness, opacity, grain, color);
+
+        for (int i = 1; i < _stroke.Count; i++)
+        {
+            Vector2 a = _stroke[i - 1];
+            Vector2 b = _stroke[i];
+            Vector2 c0 = i - 2 >= 0 ? _stroke[i - 2] : a;
+            Vector2 c1 = i + 1 < _stroke.Count ? _stroke[i + 1] : b;
+            float seg = Vector2.Distance(a, b);
+            int steps = Mathf.Max(1, Mathf.CeilToInt(seg / 0.7f));
+            for (int s = 1; s <= steps; s++)
+            {
+                float u = s / (float)steps;
+                Vector2 p = CatmullRom(c0, a, b, c1, u);
+                float speed = Vector2.Distance(prev, p);
+                traveled += speed;
+                Stamp(p, RadiusAt(traveled, speed, length, finishing, baseRadius), hardness, opacity, grain, color);
+                prev = p;
+            }
+        }
 
         if (Tool != BrushTool.Eraser)
             HasInk = true;
+    }
+
+    private float StrokeLength()
+    {
+        float length = 0f;
+        for (int i = 1; i < _stroke.Count; i++)
+            length += Vector2.Distance(_stroke[i - 1], _stroke[i]);
+        return Mathf.Max(length, 0.001f);
+    }
+
+    private static float RadiusAt(float traveled, float speed, float length, bool finishing, float baseRadius)
+    {
+        float startTaper = Mathf.SmoothStep(0.18f, 1f, Mathf.Clamp01(traveled / TaperDistance));
+        float endTaper = 1f;
+        if (finishing)
+            endTaper = Mathf.SmoothStep(0.12f, 1f, Mathf.Clamp01((length - traveled) / TaperDistance));
+
+        float speedTaper = Mathf.Lerp(1.18f, 0.42f, Mathf.Clamp01(speed / 16f));
+        float shortStroke = Mathf.Lerp(0.55f, 1f, Mathf.Clamp01(length / 40f));
+        return Mathf.Max(0.65f, baseRadius * startTaper * endTaper * speedTaper * shortStroke);
+    }
+
+    private static Vector2 CatmullRom(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
+    {
+        float t2 = t * t;
+        float t3 = t2 * t;
+        return 0.5f * (
+            2f * p1 +
+            (-p0 + p2) * t +
+            (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 +
+            (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
     }
 
     private void GetToolParams(out float radius, out float hardness, out float opacity, out bool grain, out Color32 color)
@@ -175,15 +284,15 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
         switch (Tool)
         {
             case BrushTool.Pencil:
-                radius = BrushSize * 0.5f; hardness = 0.6f; opacity = 0.8f; grain = true; break;
+                radius = BrushSize * 0.5f; hardness = 0.55f; opacity = 0.78f; grain = true; break;
             case BrushTool.Marker:
-                radius = BrushSize * 1.8f; hardness = 1f; opacity = 0.9f; break;
+                radius = BrushSize * 1.8f; hardness = 0.92f; opacity = 0.88f; break;
             case BrushTool.Brush:
-                radius = BrushSize * 1.5f; hardness = 0.15f; opacity = 0.18f; break;
+                radius = BrushSize * 1.65f; hardness = 0.22f; opacity = 0.42f; break;
             case BrushTool.Eraser:
                 radius = BrushSize * 2.5f; hardness = 0.85f; opacity = 1f; break;
             default:
-                radius = BrushSize; hardness = 0.9f; opacity = 1f; break;
+                radius = BrushSize; hardness = 0.55f; opacity = 0.92f; break;
         }
 
         radius = Mathf.Max(0.8f, radius);
@@ -209,6 +318,7 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
                     continue;
 
                 float coverage = d <= hardness ? 1f : (1f - d) / (1f - hardness);
+                coverage *= coverage;
                 float a = coverage * opacity;
                 if (grain)
                     a *= 0.55f + 0.45f * Hash(x, y);

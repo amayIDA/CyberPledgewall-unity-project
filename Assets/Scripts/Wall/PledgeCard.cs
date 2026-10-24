@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 /// <summary>
 /// One neon card on the wall: the visitor's handwriting rendered as white ink, with their name beneath.
-/// Cards live in fixed slots; they animate in/out, bob gently and can flash when a new pledge arrives.
+/// WallBoard can drive pose (carousel / hero); otherwise the card bobs in place.
 /// </summary>
 public class PledgeCard : MonoBehaviour
 {
@@ -22,8 +22,11 @@ public class PledgeCard : MonoBehaviour
     private float bobPhase;
     private float flash;
     private bool hasPledge;
+    private bool posedExternally;
+    private Vector2 restPosition;
 
     public bool HasPledge => hasPledge;
+    public RectTransform Rect => rt != null ? rt : (rt = (RectTransform)transform);
 
     private void Awake()
     {
@@ -31,8 +34,8 @@ public class PledgeCard : MonoBehaviour
         bobPhase = Random.value * 10f;
         if (group == null)
             group = GetComponent<CanvasGroup>();
-        ApplyContent(null, null);
-        group.alpha = 0f;
+        if (group.alpha <= 0f)
+            group.alpha = 0f;
     }
 
     private void OnDestroy()
@@ -43,21 +46,70 @@ public class PledgeCard : MonoBehaviour
 
     private void Update()
     {
-        float time = Time.unscaledTime + bobPhase;
-        rt.anchoredPosition = new Vector2(Mathf.Sin(time * 0.55f) * 2f, Mathf.Sin(time * 0.8f) * 5f);
-
-        flash = Mathf.MoveTowards(flash, 0f, Time.unscaledDeltaTime * 1.4f);
-        if (glow != null)
+        if (posedExternally)
         {
-            // Slow shimmer on filled cards, bright flare after a new pledge lands.
-            float shimmer = hasPledge ? 0.12f + 0.1f * Mathf.Sin(time * 1.3f) : 0f;
-            Color c = glow.color;
-            c.a = Mathf.Max(shimmer, flash);
-            glow.color = c;
+            TickGlow();
+            return;
         }
+
+        float time = Time.unscaledTime + bobPhase;
+        rt.anchoredPosition = restPosition + new Vector2(Mathf.Sin(time * 0.55f) * 2f, Mathf.Sin(time * 0.8f) * 5f);
+        TickGlow();
     }
 
-    /// <summary>Fills the card without animating (use Show/Hide for transitions).</summary>
+    private void TickGlow()
+    {
+        float time = Time.unscaledTime + bobPhase;
+        flash = Mathf.MoveTowards(flash, 0f, Time.unscaledDeltaTime * 1.4f);
+        if (glow == null)
+            return;
+
+        float shimmer = hasPledge ? 0.12f + 0.1f * Mathf.Sin(time * 1.3f) : 0f;
+        Color c = glow.color;
+        c.a = Mathf.Max(shimmer, flash);
+        glow.color = c;
+    }
+
+    public void Flash()
+    {
+        flash = 1f;
+    }
+
+    public void ReleaseToGrid(Vector2 slotPosition, Vector2 size)
+    {
+        posedExternally = false;
+        if (rt == null)
+            rt = (RectTransform)transform;
+        restPosition = slotPosition;
+        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = size;
+        rt.anchoredPosition3D = new Vector3(slotPosition.x, slotPosition.y, 0f);
+        rt.localRotation = Quaternion.identity;
+        rt.localScale = Vector3.one;
+        gameObject.SetActive(true);
+    }
+
+    public void SetPose(Vector2 position, Vector3 euler, float scale, float alpha)
+    {
+        SetPose3D(new Vector3(position.x, position.y, 0f), euler, scale, alpha);
+    }
+
+    /// <summary>Full pose including depth (z, canvas units; negative = toward the viewer).</summary>
+    public void SetPose3D(Vector3 position, Vector3 euler, float scale, float alpha)
+    {
+        posedExternally = true;
+        if (rt == null)
+            rt = (RectTransform)transform;
+        rt.anchoredPosition3D = position;
+        rt.localRotation = Quaternion.Euler(euler);
+        rt.localScale = Vector3.one * scale;
+        if (group == null)
+            group = GetComponent<CanvasGroup>();
+        group.alpha = alpha;
+        gameObject.SetActive(alpha > 0.001f || scale > 0.01f);
+    }
+
     public void Populate(string visitorName, byte[] drawingBytes)
     {
         ApplyContent(visitorName, drawingBytes);
@@ -70,15 +122,21 @@ public class PledgeCard : MonoBehaviour
         hasPledge = false;
     }
 
-    /// <summary>Animate in. Filled cards pop at full opacity, empty ones settle at a dim placeholder.</summary>
     public void Reveal(float delay, bool highlight = false)
     {
+        posedExternally = false;
         Restart(RevealRoutine(delay, highlight));
     }
 
     public void Conceal(float delay)
     {
         Restart(ConcealRoutine(delay));
+    }
+
+    public Coroutine FlipTo(string visitorName, byte[] drawingBytes, float delay = 0f)
+    {
+        Restart(FlipRoutine(visitorName, drawingBytes, delay));
+        return routine;
     }
 
     private void Restart(IEnumerator next)
@@ -119,8 +177,199 @@ public class PledgeCard : MonoBehaviour
         routine = null;
     }
 
+    private IEnumerator FlipRoutine(string visitorName, byte[] drawingBytes, float delay)
+    {
+        posedExternally = true;
+        if (delay > 0f)
+            yield return new WaitForSecondsRealtime(delay);
+
+        Vector2 pos = restPosition;
+        yield return UITween.Run(0.28f, t =>
+        {
+            SetPose3D(new Vector3(pos.x, pos.y, -70f * t), new Vector3(0f, 90f * t, 0f), 1f, 1f);
+        }, UITween.InCubic);
+
+        Populate(visitorName, drawingBytes);
+        Flash();
+
+        yield return UITween.Run(0.38f, t =>
+        {
+            SetPose3D(new Vector3(pos.x, pos.y, -70f * (1f - t)), new Vector3(0f, -90f * (1f - t), 0f), 1f, 1f);
+        }, UITween.OutCubic);
+
+        posedExternally = false;
+        ReleaseToGrid(restPosition, rt.sizeDelta);
+        routine = null;
+    }
+
+    // ---- arrival choreography helpers --------------------------------------------------------
+
+    private RectMask2D inkMask;
+    private Image scanCore;
+    private Image scanGlow;
+    private Coroutine punchRoutine;
+    private Coroutine restoreRoutine;
+
+    public float Alpha => group != null ? group.alpha : 0f;
+
+    private RectTransform InkArea => drawingImage != null ? drawingImage.rectTransform.parent as RectTransform : null;
+
+    /// <summary>World position of the ink scanner's bright edge (for emitting sparks).</summary>
+    public Vector3 ScanWorldPoint => scanCore != null ? scanCore.rectTransform.position : transform.position;
+
+    public void CancelRoutine()
+    {
+        if (routine != null)
+            StopCoroutine(routine);
+        routine = null;
+        if (restoreRoutine != null)
+            StopCoroutine(restoreRoutine);
+        restoreRoutine = null;
+    }
+
+    /// <summary>Hide ink + name so they can be revealed by SetInkProgress / SetNameProgress.</summary>
+    public void PrepareReveal()
+    {
+        SetInkProgress(0f);
+        SetNameProgress(0f);
+    }
+
+    public void SetInkProgress(float p)
+    {
+        RectTransform area = InkArea;
+        if (area == null)
+            return;
+
+        if (inkMask == null)
+        {
+            inkMask = area.GetComponent<RectMask2D>();
+            if (inkMask == null)
+                inkMask = area.gameObject.AddComponent<RectMask2D>();
+        }
+
+        p = Mathf.Clamp01(p);
+        inkMask.enabled = p < 1f;
+        inkMask.padding = new Vector4(0f, 0f, Mathf.Max(0f, area.rect.width * (1f - p)), 0f);
+
+        bool scanning = p > 0.001f && p < 0.999f;
+        if (scanning && scanCore == null)
+        {
+            scanGlow = MakeScanImage("ScanGlow", new Color(0.35f, 0.85f, 1f, 0.28f));
+            scanCore = MakeScanImage("ScanCore", new Color(0.85f, 1f, 1f, 0.95f));
+        }
+
+        if (scanCore == null)
+            return;
+
+        scanCore.gameObject.SetActive(scanning);
+        scanGlow.gameObject.SetActive(scanning);
+        if (!scanning)
+            return;
+
+        // The bar spans the card's full height (top edge to bottom edge); only its x follows the ink edge.
+        float h = Rect.rect.height - 8f;
+        scanCore.rectTransform.sizeDelta = new Vector2(4f, h);
+        scanGlow.rectTransform.sizeDelta = new Vector2(46f, h);
+        Vector3 world = area.TransformPoint(new Vector3(area.rect.xMin + p * area.rect.width, area.rect.center.y, 0f));
+        Vector3 local = Rect.InverseTransformPoint(world);
+        Vector2 center = Rect.rect.center;
+        scanCore.rectTransform.anchoredPosition = scanGlow.rectTransform.anchoredPosition = new Vector2(local.x, center.y);
+        scanCore.transform.SetAsLastSibling();
+    }
+
+    public void SetNameProgress(float p)
+    {
+        if (nameText == null)
+            nameText = GetComponentInChildren<TMP_Text>(true);
+        if (nameText == null)
+            return;
+
+        nameText.maxVisibleCharacters = p >= 1f ? 99999 : Mathf.CeilToInt(nameText.text.Length * Mathf.Clamp01(p));
+    }
+
+    public void ClearReveal()
+    {
+        if (inkMask != null)
+            inkMask.enabled = false;
+        if (scanCore != null)
+        {
+            scanCore.gameObject.SetActive(false);
+            scanGlow.gameObject.SetActive(false);
+        }
+
+        if (nameText != null)
+            nameText.maxVisibleCharacters = 99999;
+    }
+
+    private Image MakeScanImage(string objectName, Color color)
+    {
+        var go = new GameObject(objectName, typeof(RectTransform), typeof(Image));
+        go.transform.SetParent(Rect, false);
+        var img = go.GetComponent<Image>();
+        img.raycastTarget = false;
+        img.color = color;
+        RectTransform r = img.rectTransform;
+        r.anchorMin = r.anchorMax = r.pivot = new Vector2(0.5f, 0.5f);
+        go.SetActive(false);
+        return img;
+    }
+
+    /// <summary>Scale punch that settles back to 1 (used when a card lands).</summary>
+    public void Punch(float amount = 0.07f, float duration = 0.45f)
+    {
+        if (punchRoutine != null)
+            StopCoroutine(punchRoutine);
+        punchRoutine = StartCoroutine(UITween.Run(duration, t =>
+        {
+            float wobble = Mathf.Sin(t * Mathf.PI * 2f) * Mathf.Exp(-3.2f * t);
+            transform.localScale = Vector3.one * (1f + amount * wobble);
+            if (t >= 1f)
+                transform.localScale = Vector3.one;
+        }, x => x));
+    }
+
+    /// <summary>Snap to its grid slot, fully visible (used when the hero card lands here).</summary>
+    public void ShowLanded(Vector2 slotPosition, Vector2 size)
+    {
+        CancelRoutine();
+        ReleaseToGrid(slotPosition, size);
+        group.alpha = 1f;
+        Flash();
+        Punch();
+    }
+
+    /// <summary>Ease a dimmed card back to normal and re-seat it in the grid.</summary>
+    public void RestoreFromDim(Vector2 slotPosition, Vector2 size, float delay)
+    {
+        CancelRoutine();
+        restPosition = slotPosition;
+        restoreRoutine = StartCoroutine(RestoreRoutine(slotPosition, size, delay));
+    }
+
+    private IEnumerator RestoreRoutine(Vector2 slotPosition, Vector2 size, float delay)
+    {
+        float target = hasPledge ? 1f : emptyAlpha;
+        float fromAlpha = group.alpha;
+        float fromScale = transform.localScale.x;
+        float fromZ = rt.anchoredPosition3D.z;
+        rt.sizeDelta = size;
+        yield return UITween.Run(0.6f, t =>
+        {
+            group.alpha = Mathf.Lerp(fromAlpha, target, Mathf.Clamp01(t));
+            transform.localScale = Vector3.one * Mathf.LerpUnclamped(fromScale, 1f, t);
+            rt.anchoredPosition3D = new Vector3(slotPosition.x, slotPosition.y, Mathf.Lerp(fromZ, 0f, Mathf.Clamp01(t)));
+            if (hasPledge && t > 0.2f && t < 0.3f)
+                flash = Mathf.Max(flash, 0.4f);
+        }, UITween.OutCubic, delay);
+
+        ReleaseToGrid(slotPosition, size);
+        group.alpha = target;
+        restoreRoutine = null;
+    }
+
     private void ApplyContent(string visitorName, byte[] drawingBytes)
     {
+        ClearReveal();
         if (nameText == null)
             nameText = GetComponentInChildren<TMP_Text>(true);
         if (drawingImage == null)
@@ -162,10 +411,6 @@ public class PledgeCard : MonoBehaviour
             drawingFitter.aspectRatio = texture.width / (float)texture.height;
     }
 
-    /// <summary>
-    /// Pledges are drawn as dark ink on a transparent canvas. Show them as white ink: keep alpha, force white.
-    /// Older opaque "paper" pledges are converted by treating darkness as ink strength.
-    /// </summary>
     private static void RecolourToWhiteInk(Texture2D tex)
     {
         Color32[] pixels = tex.GetPixels32();

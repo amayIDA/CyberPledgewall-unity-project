@@ -54,14 +54,7 @@ public static class DrawingUIBuilder
             scaler.matchWidthOrHeight = 0.5f;
         }
 
-        CyberBackdrop backdrop = CyberUIKit.BuildBackdrop(root);
-
-        Vector2[] logoPositions =
-        {
-            new Vector2(0f, 432f), new Vector2(0f, 353f), new Vector2(0f, 455f), new Vector2(0f, 455f)
-        };
-        float[] logoWidths = { 677f, 677f, 458f, 458f };
-        Image logo = CyberUIKit.BuildLogo(root, logoPositions[0], logoWidths[0]);
+        SceneVideoBackground video = CyberUIKit.BuildVideoBackground(root);
 
         // ---- Welcome ----
         CanvasGroup welcome = NewScreen(root, "WelcomeScreen");
@@ -69,8 +62,9 @@ public static class DrawingUIBuilder
 
         // ---- Register ----
         CanvasGroup register = NewScreen(root, "RegisterScreen");
-        CyberField nameField = CyberUIKit.BuildField(register.transform, "NameInput", "Name", new Vector2(0f, 98f), 40);
-        CyberField idField = CyberUIKit.BuildField(register.transform, "EmployeeIdInput", "Employee ID", new Vector2(0f, -98f), 24);
+        CyberField nameField = CyberUIKit.BuildField(register.transform, "NameInput", "Name", new Vector2(0f, 240f), 40);
+        CyberField idField = CyberUIKit.BuildField(register.transform, "EmailIdInput", "Email ID", new Vector2(0f, 60f), 80);
+        register.gameObject.AddComponent<KeyboardAvoider>();
         Button submit = CyberUIKit.BuildButton(register.transform, "SubmitButton", "Submit", 38f, ButtonPosition);
 
         // ---- Draw ----
@@ -107,10 +101,7 @@ public static class DrawingUIBuilder
         var flow = flowGo.AddComponent<DrawingFlow>();
         var so = new SerializedObject(flow);
         CyberUIKit.SetArray(so.FindProperty("screens"), new[] { welcome, register, draw, thanks });
-        so.FindProperty("logo").objectReferenceValue = logo.rectTransform;
-        SetVectors(so.FindProperty("logoPositions"), logoPositions);
-        SetFloats(so.FindProperty("logoWidths"), logoWidths);
-        so.FindProperty("backdrop").objectReferenceValue = backdrop;
+        so.FindProperty("videoBackground").objectReferenceValue = video;
         so.FindProperty("network").objectReferenceValue = controller;
         so.FindProperty("drawing").objectReferenceValue = drawing;
         so.FindProperty("startButton").objectReferenceValue = start;
@@ -124,6 +115,14 @@ public static class DrawingUIBuilder
         so.FindProperty("thanksPanel").objectReferenceValue = thanksPanel;
         so.FindProperty("thanksText").objectReferenceValue = thanksText;
         so.ApplyModifiedPropertiesWithoutUndo();
+
+        var hostGo = new GameObject("HostIpPanel", typeof(RectTransform), typeof(Image), typeof(HostIpPanel));
+        hostGo.transform.SetParent(root, false);
+        hostGo.transform.SetAsLastSibling();
+        var host = hostGo.GetComponent<HostIpPanel>();
+        var hostSo = new SerializedObject(host);
+        hostSo.FindProperty("network").objectReferenceValue = controller;
+        hostSo.ApplyModifiedPropertiesWithoutUndo();
     }
 
     private static CanvasGroup NewScreen(Transform root, string name)

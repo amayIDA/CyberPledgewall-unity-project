@@ -6,7 +6,7 @@ using UnityEngine.UI;
 
 /// <summary>
 /// Drives the visitor journey on the drawing station:
-/// Welcome (Touch to Explore) -> Register (name + employee ID) -> Draw (My Cyber Pledge) -> Thank You -> back to Welcome.
+/// Welcome (Touch to Explore) -> Register (name + email ID) -> Draw (My Cyber Pledge) -> Thank You -> back to Welcome.
 /// Screens are scene objects built by Cyber Pledge Wall/Rebuild Drawing UI; this only animates and wires them.
 /// </summary>
 public class DrawingFlow : MonoBehaviour
@@ -21,6 +21,7 @@ public class DrawingFlow : MonoBehaviour
     [SerializeField] private Vector2[] logoPositions;
     [SerializeField] private float[] logoWidths;
     [SerializeField] private CyberBackdrop backdrop;
+    [SerializeField] private SceneVideoBackground videoBackground;
     [SerializeField] private DrawingAppController network;
     [SerializeField] private DrawingCanvas drawing;
 
@@ -43,15 +44,13 @@ public class DrawingFlow : MonoBehaviour
 
     [Header("Pen")]
     [SerializeField] private Color ink = new Color(0.03f, 0.03f, 0.06f, 1f);
-    [SerializeField] private float penSize = 3.2f;
-
-    private const float LogoAspect = 291f / 1214f;
+    [SerializeField] private float penSize = 6.4f;
 
     private readonly Dictionary<RectTransform, Vector2> restPositions = new Dictionary<RectTransform, Vector2>();
     private Step current = Step.Welcome;
     private bool transitioning;
+    private bool sending;
     private float lastActivity;
-    private Coroutine logoRoutine;
 
     private void Awake()
     {
@@ -75,9 +74,18 @@ public class DrawingFlow : MonoBehaviour
         nameField.Input.onSubmit.AddListener(_ => employeeField.Input.ActivateInputField());
         employeeField.Input.onSubmit.AddListener(_ => SubmitRegistration());
 
-        drawing.Tool = BrushTool.Pen;
+        var register = screens != null && screens.Length > (int)Step.Register ? screens[(int)Step.Register] : null;
+        if (register != null && register.GetComponent<KeyboardAvoider>() == null)
+            register.gameObject.AddComponent<KeyboardAvoider>();
+
+        drawing.Tool = BrushTool.Brush;
         drawing.BrushColor = ink;
         drawing.BrushSize = penSize;
+
+        if (logo != null)
+            logo.gameObject.SetActive(false);
+        if (backdrop != null)
+            backdrop.gameObject.SetActive(false);
     }
 
     private void Start()
@@ -85,8 +93,8 @@ public class DrawingFlow : MonoBehaviour
         for (int i = 0; i < screens.Length; i++)
             SetScreenActive(screens[i], false);
 
-        SetLogo(Step.Welcome, false);
-        backdrop.SetTitleHero(true, 0.01f);
+        if (videoBackground != null)
+            videoBackground.PlayIdle();
         StartCoroutine(Reveal(Step.Welcome, 0.9f));
         lastActivity = Time.unscaledTime;
     }
@@ -139,17 +147,51 @@ public class DrawingFlow : MonoBehaviour
 
         if (!drawing.HasInk)
         {
+            if (network != null)
+                network.SetStatus("Draw your pledge before sending.");
             StartCoroutine(Nudge(drawPanel));
             return;
         }
 
-        string error;
-        if (!network.TrySubmit(nameField.Input.text.Trim(), employeeField.Input.text.Trim(), out error))
+        if (sending)
+            return;
+        StartCoroutine(SendRoutine());
+    }
+
+    private IEnumerator SendRoutine()
+    {
+        sending = true;
+        sendButton.interactable = false;
+
+        if (!network.TrySubmit(nameField.Input.text.Trim(), employeeField.Input.text.Trim(), out string pledgeId, out _))
         {
-            StartCoroutine(Nudge(drawPanel));
-            return;
+            // The wall isn't reachable: try to reconnect, keep the drawing, and tell the visitor.
+            network.ConnectToWall();
+            yield return Nudge(drawPanel);
+            sendButton.interactable = true;
+            sending = false;
+            yield break;
         }
 
+        // Only say thank you once the wall confirms it received the pledge.
+        float waited = 0f;
+        while (!network.IsAcknowledged(pledgeId) && waited < 15f)
+        {
+            waited += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        sendButton.interactable = true;
+        sending = false;
+
+        if (waited >= 15f)
+        {
+            network.SetStatus("The wall did not confirm your pledge. Check the connection and tap Send again.");
+            yield return Nudge(drawPanel);
+            yield break;
+        }
+
+        network.SetStatus(string.Empty);
         GoTo(Step.Thanks);
     }
 
@@ -183,8 +225,8 @@ public class DrawingFlow : MonoBehaviour
         }
 
         current = next;
-        backdrop.SetTitleHero(next == Step.Welcome);
-        SetLogo(next, true);
+        if (videoBackground != null)
+            videoBackground.SetDrawMode(next == Step.Draw);
         yield return Reveal(next, 0.55f);
 
         lastActivity = Time.unscaledTime;
@@ -268,7 +310,9 @@ public class DrawingFlow : MonoBehaviour
     private IEnumerator ThanksSequence()
     {
         yield return new WaitForSecondsRealtime(0.25f);
-        backdrop.Burst(Vector2.zero);
+        UiSfx.Success();
+        if (backdrop != null && backdrop.gameObject.activeInHierarchy)
+            backdrop.Burst(Vector2.zero);
 
         if (thanksText != null)
         {
@@ -289,44 +333,13 @@ public class DrawingFlow : MonoBehaviour
         if (target == null)
             yield break;
 
+        UiSfx.Error();
         Vector2 start = target.anchoredPosition;
         yield return UITween.Run(0.4f, t =>
         {
             target.anchoredPosition = start + new Vector2(Mathf.Sin(t * 30f) * 14f * (1f - t), 0f);
         }, x => x);
         target.anchoredPosition = start;
-    }
-
-    // ---- logo --------------------------------------------------------------------------------
-
-    private void SetLogo(Step step, bool animate)
-    {
-        if (logo == null || logoPositions == null || logoPositions.Length <= (int)step)
-            return;
-
-        Vector2 toPos = logoPositions[(int)step];
-        float toWidth = logoWidths[(int)step];
-        if (logoRoutine != null)
-            StopCoroutine(logoRoutine);
-
-        if (!animate)
-        {
-            ApplyLogo(toPos, toWidth);
-            return;
-        }
-
-        Vector2 fromPos = logo.anchoredPosition;
-        float fromWidth = logo.sizeDelta.x;
-        logoRoutine = StartCoroutine(UITween.Run(0.8f, t =>
-        {
-            ApplyLogo(Vector2.LerpUnclamped(fromPos, toPos, t), Mathf.LerpUnclamped(fromWidth, toWidth, t));
-        }, UITween.InOutCubic));
-    }
-
-    private void ApplyLogo(Vector2 position, float width)
-    {
-        logo.anchoredPosition = position;
-        logo.sizeDelta = new Vector2(width, width * LogoAspect);
     }
 
     private static void SetScreenActive(CanvasGroup screen, bool active)

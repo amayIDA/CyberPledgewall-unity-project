@@ -4,7 +4,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.UI;
 
-/// <summary>Builds the wall display: key-art backdrop, logo and a 3x2 grid of neon pledge cards.</summary>
+/// <summary>Builds the wall display: key-art backdrop and a 4x3 neon grid of up to 12 pledge cards.</summary>
 public static class WallUIBuilder
 {
     private const string WallScenePath = "Assets/Scenes/WallScene.unity";
@@ -13,7 +13,7 @@ public static class WallUIBuilder
     // Card sprite frames are drawn with a 14px glow margin; the multiplier shrinks the 80px corners to the design's radius.
     private const float CornerMultiplier = 1.7f;
     private const float Margin = 14f / CornerMultiplier;
-    private static readonly Vector2 CardVisible = new Vector2(547f, 315f);
+    private static readonly Vector2 CardVisible = new Vector2(500f, 290f);
 
     [MenuItem("Cyber Pledge Wall/Rebuild Wall UI")]
     public static void RebuildInWallScene()
@@ -57,22 +57,28 @@ public static class WallUIBuilder
         }
 
         CyberBackdrop backdrop = CyberUIKit.BuildBackdrop(root);
-        var backdropSo = new SerializedObject(backdrop);
-        backdropSo.FindProperty("startAsGhost").boolValue = true;
-        backdropSo.ApplyModifiedPropertiesWithoutUndo();
-        CyberUIKit.BuildLogo(root, new Vector2(0f, 419f), 637f);
+        backdrop.gameObject.SetActive(false);
+        SceneVideoBackground video = CyberUIKit.BuildVideoBackground(root);
+        var videoSo = new SerializedObject(video);
+        var carnival = AssetDatabase.LoadAssetAtPath<UnityEngine.Video.VideoClip>(CyberUIKit.DrawVideoPath);
+        if (carnival != null)
+        {
+            videoSo.FindProperty("idleClip").objectReferenceValue = carnival;
+            videoSo.FindProperty("drawClip").objectReferenceValue = carnival;
+            videoSo.ApplyModifiedPropertiesWithoutUndo();
+        }
 
         RectTransform grid = CyberUIKit.NewRect("PledgeGrid", root);
         CyberUIKit.Stretch(grid);
 
-        float[] columns = { -612.5f, 0f, 612.5f };
-        float[] rows = { 114f, -268f };
-        var cards = new PledgeCard[6];
-        for (int row = 0; row < 2; row++)
+        float[] columns = { -705f, -235f, 235f, 705f };
+        float[] rows = { 300f, 0f, -300f };
+        var cards = new PledgeCard[12];
+        for (int row = 0; row < 3; row++)
         {
-            for (int col = 0; col < 3; col++)
+            for (int col = 0; col < 4; col++)
             {
-                int index = row * 3 + col;
+                int index = row * 4 + col;
                 RectTransform slot = CyberUIKit.NewRect("Slot" + (index + 1), grid);
                 CyberUIKit.Place(slot, new Vector2(columns[col], rows[row]), CardVisible + Vector2.one * (Margin * 2f));
 

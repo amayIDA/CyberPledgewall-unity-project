@@ -70,7 +70,13 @@ private void Start()
 
         if (!nm.StartHost())
         {
-            SetStatus("Failed to start host.");
+            SetStatus($"Cannot start the wall: port {config.port} is in use. Another wall window is probably already running - close it and restart.");
+            if (statusText != null)
+            {
+                statusText.color = new Color(1f, 0.55f, 0.55f, 1f);
+                statusText.fontSize = 30f;
+            }
+
             return;
         }
 
@@ -124,11 +130,11 @@ private void Start()
         board.Add(visitorName, drawingBytes);
     }
 
-public void ReceiveNetworkPledge(string visitorName, string employeeId, byte[] drawingBytes)
+public void ReceiveNetworkPledge(string visitorName, string emailId, byte[] drawingBytes)
     {
         EnsureStorageManager();
         if (PledgeStorageManager.Instance != null)
-            PledgeStorageManager.Instance.SavePledge(visitorName, employeeId, drawingBytes);
+            PledgeStorageManager.Instance.SavePledge(visitorName, emailId, drawingBytes);
 
         AddPledgeCard(visitorName, drawingBytes);
     }

@@ -30,6 +30,7 @@ public class CyberField : MonoBehaviour
         if (frame == null)
             frame = GetComponent<Image>();
 
+        input.shouldHideMobileInput = true;
         input.onSelect.AddListener(_ => focusTarget = 1f);
         input.onDeselect.AddListener(_ => focusTarget = 0f);
         input.onValueChanged.AddListener(_ => error = 0f);
@@ -47,6 +48,7 @@ public class CyberField : MonoBehaviour
     public void Reject()
     {
         error = 1f;
+        UiSfx.Error();
         if (shakeRoutine != null)
             StopCoroutine(shakeRoutine);
         shakeRoutine = StartCoroutine(Shake());

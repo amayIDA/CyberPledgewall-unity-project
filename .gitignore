@@ -112,3 +112,11 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Visitor data written by the wall at runtime (names / email IDs)
+/pledges.json
+/Pledges/
+
+# Editor screenshots
+/Assets/Screenshots/
+/Assets/Screenshots.meta

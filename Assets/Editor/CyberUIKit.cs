@@ -3,6 +3,7 @@ using TMPro;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.Video;
 
 /// <summary>Shared sprite generation and UI construction helpers for the Drawing and Wall scene builders.</summary>
 public static class CyberUIKit
@@ -13,6 +14,8 @@ public static class CyberUIKit
     public const string ButtonPath = "Assets/UI/Group 8.png";
     public const string LogoPath = "Assets/UI/image 1.png";
     public const string FieldPath = "Assets/UI/Registration place holder.png";
+    public const string IdleVideoPath = "Assets/Video/BG_Idle.mp4";
+    public const string DrawVideoPath = "Assets/Video/CYBER_CARNIVAL_Background_4K_BG.mp4";
 
     public static readonly Color Cyan = new Color(0.30f, 0.86f, 1f, 1f);
     public static readonly Color NavyFallback = new Color(0.01f, 0.04f, 0.22f, 1f);
@@ -270,6 +273,29 @@ public static class CyberUIKit
         so.FindProperty("moteSprite").objectReferenceValue = SoftDot;
         so.ApplyModifiedPropertiesWithoutUndo();
         return backdrop;
+    }
+
+    public static SceneVideoBackground BuildVideoBackground(Transform root)
+    {
+        RectTransform holder = NewRect("VideoBackground", root);
+        Stretch(holder);
+        holder.SetAsFirstSibling();
+
+        var image = holder.gameObject.AddComponent<RawImage>();
+        image.color = Color.white;
+        image.raycastTarget = false;
+
+        var fitter = holder.gameObject.AddComponent<AspectRatioFitter>();
+        fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+        fitter.aspectRatio = 16f / 9f;
+
+        holder.gameObject.AddComponent<VideoPlayer>();
+        var video = holder.gameObject.AddComponent<SceneVideoBackground>();
+        var so = new SerializedObject(video);
+        so.FindProperty("idleClip").objectReferenceValue = AssetDatabase.LoadAssetAtPath<VideoClip>(IdleVideoPath);
+        so.FindProperty("drawClip").objectReferenceValue = AssetDatabase.LoadAssetAtPath<VideoClip>(DrawVideoPath);
+        so.ApplyModifiedPropertiesWithoutUndo();
+        return video;
     }
 
     private static void FillParent(RectTransform rt, Sprite sprite)

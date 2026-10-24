@@ -5,7 +5,8 @@ using System.Collections.Generic;
 public class PledgeEntry
 {
     public string visitorName;
-    public string employeeId;
+    public string emailId;
+    public string employeeId;   // legacy: older saves stored an employee ID
     public string pledgeText;   // legacy: older saves stored a typed message
     public string imageBase64;
     public string timestamp;
