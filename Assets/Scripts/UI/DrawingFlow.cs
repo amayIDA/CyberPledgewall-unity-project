@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 /// <summary>
@@ -39,17 +40,18 @@ public class DrawingFlow : MonoBehaviour
 
     [Header("Timing")]
     [SerializeField] private float thanksSeconds = 5f;
-    [SerializeField] private float registerIdleSeconds = 90f;
-    [SerializeField] private float drawIdleSeconds = 240f;
+    private const float IdleRestartSeconds = 60f;
 
     [Header("Pen")]
     [SerializeField] private Color ink = new Color(0.03f, 0.03f, 0.06f, 1f);
-    [SerializeField] private float penSize = 6.4f;
+    [SerializeField] private float penSize = 3.6f;
 
     private readonly Dictionary<RectTransform, Vector2> restPositions = new Dictionary<RectTransform, Vector2>();
+    private readonly Dictionary<RectTransform, Vector3> restScales = new Dictionary<RectTransform, Vector3>();
     private Step current = Step.Welcome;
     private bool transitioning;
     private bool sending;
+    private bool restarting;
     private float lastActivity;
 
     private void Awake()
@@ -62,7 +64,11 @@ public class DrawingFlow : MonoBehaviour
         foreach (CanvasGroup screen in screens)
         {
             foreach (Transform child in screen.transform)
-                restPositions[(RectTransform)child] = ((RectTransform)child).anchoredPosition;
+            {
+                var childRect = (RectTransform)child;
+                restPositions[childRect] = childRect.anchoredPosition;
+                restScales[childRect] = childRect.localScale;
+            }
         }
 
         startButton.onClick.AddListener(() => GoTo(Step.Register));
@@ -78,7 +84,7 @@ public class DrawingFlow : MonoBehaviour
         if (register != null && register.GetComponent<KeyboardAvoider>() == null)
             register.gameObject.AddComponent<KeyboardAvoider>();
 
-        drawing.Tool = BrushTool.Brush;
+        drawing.Tool = BrushTool.Pen;
         drawing.BrushColor = ink;
         drawing.BrushSize = penSize;
 
@@ -108,14 +114,20 @@ public class DrawingFlow : MonoBehaviour
             lastActivity = Time.unscaledTime;
 
         float idle = Time.unscaledTime - lastActivity;
-        if (!transitioning && ((current == Step.Register && idle > registerIdleSeconds) ||
-                               (current == Step.Draw && idle > drawIdleSeconds)))
-            ResetToWelcome();
+        if (!restarting && !transitioning && current != Step.Welcome && idle > IdleRestartSeconds)
+        {
+            restarting = true;
+            SceneManager.LoadScene(gameObject.scene.buildIndex);
+        }
     }
 
     private static bool IsPressed()
     {
         if (Pointer.current != null && Pointer.current.press.isPressed)
+            return true;
+        if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.isPressed)
+            return true;
+        if (Pen.current != null && (Pen.current.tip.isPressed || Pen.current.press.isPressed))
             return true;
         return Keyboard.current != null && Keyboard.current.anyKey.isPressed;
     }
@@ -137,6 +149,7 @@ public class DrawingFlow : MonoBehaviour
             return;
         }
 
+        VisitorLog.Append(nameField.Input.text, employeeField.Input.text);
         GoTo(Step.Draw);
     }
 
@@ -275,16 +288,19 @@ public class DrawingFlow : MonoBehaviour
             float delay = i * 0.09f;
 
             Vector2 from = rest + new Vector2(0f, -70f);
-            child.anchoredPosition = from;
+            Vector3 restScale = restScales[child];
+            if (button == null)
+                child.anchoredPosition = from;
             if (group != null) group.alpha = 0f;
             if (button != null) button.EntranceScale = 0.85f;
-            else child.localScale = Vector3.one * 0.9f;
+            else child.localScale = restScale * 0.9f;
 
             StartCoroutine(UITween.Run(duration, t =>
             {
-                child.anchoredPosition = Vector2.LerpUnclamped(from, rest, t);
+                if (button == null)
+                    child.anchoredPosition = Vector2.LerpUnclamped(from, rest, t);
                 float scale = Mathf.LerpUnclamped(0.88f, 1f, t);
-                if (button != null) button.EntranceScale = scale; else child.localScale = Vector3.one * scale;
+                if (button != null) button.EntranceScale = scale; else child.localScale = restScale * scale;
             }, UITween.OutBack, delay));
 
             StartCoroutine(UITween.Run(duration * 0.7f, t =>
@@ -299,9 +315,10 @@ public class DrawingFlow : MonoBehaviour
 
         foreach (RectTransform child in children)
         {
-            child.anchoredPosition = restPositions[child];
+            if (child.GetComponent<CyberButton>() == null)
+                child.anchoredPosition = restPositions[child];
             var button = child.GetComponent<CyberButton>();
-            if (button != null) button.EntranceScale = 1f; else child.localScale = Vector3.one;
+            if (button != null) button.EntranceScale = 1f; else child.localScale = restScales[child];
             CanvasGroup group = child.GetComponent<CanvasGroup>();
             if (group != null) group.alpha = 1f;
         }

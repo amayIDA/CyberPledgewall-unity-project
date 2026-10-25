@@ -28,6 +28,7 @@ public static class AppConfig
 {
     public const string WallFileName = "wall_config.json";
     public const string DrawingFileName = "drawing_config.json";
+    private const string HostFileName = "drawing_host.txt";
     private const string HostPrefsKey = "drawing_host";
 
     public static string Directory =>
@@ -40,23 +41,65 @@ public static class AppConfig
     public static DrawingConfig LoadDrawing()
     {
         var config = LoadOrCreate<DrawingConfig>(DrawingFileName);
-        string saved = PlayerPrefs.GetString(HostPrefsKey, string.Empty);
-        if (!string.IsNullOrWhiteSpace(saved))
-            config.hostAddress = saved.Trim();
+        string saved = ReadSavedHost();
+        if (IsRealHost(saved))
+            config.hostAddress = saved;
         return config;
+    }
+
+    public static bool IsRealHost(string ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip))
+            return false;
+        string trimmed = ip.Trim();
+        return trimmed != "127.0.0.1" && trimmed != "localhost";
     }
 
     public static void SaveWall(WallConfig config) => Save(WallFileName, config);
 
     public static void SaveDrawing(DrawingConfig config)
     {
-        if (config != null && !string.IsNullOrWhiteSpace(config.hostAddress))
+        if (config != null && IsRealHost(config.hostAddress))
         {
-            PlayerPrefs.SetString(HostPrefsKey, config.hostAddress.Trim());
+            string host = config.hostAddress.Trim();
+            config.hostAddress = host;
+            PlayerPrefs.SetString(HostPrefsKey, host);
             PlayerPrefs.Save();
+            try
+            {
+                File.WriteAllText(Path.Combine(Directory, HostFileName), host);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("Could not store the wall address: " + e.Message);
+            }
         }
 
         Save(DrawingFileName, config);
+    }
+
+    private static string ReadSavedHost()
+    {
+        string fromPrefs = PlayerPrefs.GetString(HostPrefsKey, string.Empty);
+        if (IsRealHost(fromPrefs))
+            return fromPrefs.Trim();
+
+        try
+        {
+            string path = Path.Combine(Directory, HostFileName);
+            if (File.Exists(path))
+            {
+                string fromFile = File.ReadAllText(path);
+                if (IsRealHost(fromFile))
+                    return fromFile.Trim();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("Could not read the saved wall address: " + e.Message);
+        }
+
+        return string.Empty;
     }
 
     private static T LoadOrCreate<T>(string fileName) where T : new()

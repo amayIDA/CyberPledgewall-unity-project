@@ -15,7 +15,7 @@ public enum BrushTool
 /// <summary>
 /// Freehand surface. The texture is transparent: ink is stored in the alpha channel so the panel
 /// behind it shows through here, and the wall can recolour the same PNG (white ink on navy).
-/// Strokes are smoothed and tapered like a real brush.
+/// The visitor pen uses the soft, speed-tapered brush stroke.
 /// </summary>
 [RequireComponent(typeof(RawImage))]
 public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, IPointerUpHandler
@@ -254,16 +254,16 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
         return Mathf.Max(length, 0.001f);
     }
 
-    private static float RadiusAt(float traveled, float speed, float length, bool finishing, float baseRadius)
+    private float RadiusAt(float traveled, float speed, float length, bool finishing, float baseRadius)
     {
         float startTaper = Mathf.SmoothStep(0.18f, 1f, Mathf.Clamp01(traveled / TaperDistance));
-        float endTaper = 1f;
+        float brushEnd = 1f;
         if (finishing)
-            endTaper = Mathf.SmoothStep(0.12f, 1f, Mathf.Clamp01((length - traveled) / TaperDistance));
+            brushEnd = Mathf.SmoothStep(0.12f, 1f, Mathf.Clamp01((length - traveled) / TaperDistance));
 
         float speedTaper = Mathf.Lerp(1.18f, 0.42f, Mathf.Clamp01(speed / 16f));
         float shortStroke = Mathf.Lerp(0.55f, 1f, Mathf.Clamp01(length / 40f));
-        return Mathf.Max(0.65f, baseRadius * startTaper * endTaper * speedTaper * shortStroke);
+        return Mathf.Max(0.65f, baseRadius * startTaper * brushEnd * speedTaper * shortStroke);
     }
 
     private static Vector2 CatmullRom(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
@@ -292,7 +292,7 @@ public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, I
             case BrushTool.Eraser:
                 radius = BrushSize * 2.5f; hardness = 0.85f; opacity = 1f; break;
             default:
-                radius = BrushSize; hardness = 0.55f; opacity = 0.92f; break;
+                radius = BrushSize; hardness = 0.22f; opacity = 0.42f; break;
         }
 
         radius = Mathf.Max(0.8f, radius);

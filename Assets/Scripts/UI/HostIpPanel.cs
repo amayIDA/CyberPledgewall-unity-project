@@ -1,61 +1,34 @@
 using TMPro;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 /// <summary>
-/// Invisible strip at the top of the drawing station. Long-press (~1.2s) opens a wall-IP field
-/// so a tablet can be pointed at the PC host without editing JSON on device.
+/// Config button on the drawing station. Tap it to enter the wall PC IP.
+/// This object's rect, image color, and label are authored in the editor and are not changed at runtime.
 /// </summary>
-public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler
+public class HostIpPanel : MonoBehaviour
 {
     [SerializeField] private DrawingAppController network;
-    [SerializeField] private float holdSeconds = 1.2f;
+    [SerializeField] private Button configButton;
 
     private RectTransform _panel;
     private TMP_InputField _input;
     private TMP_Text _status;
-    private bool _holding;
-    private float _holdStart;
 
     private void Awake()
     {
         if (network == null)
             network = FindAnyObjectByType<DrawingAppController>();
 
-        EnsureUi();
+        if (configButton == null)
+            configButton = GetComponent<Button>();
+
+        EnsureDialog();
+
+        if (configButton != null)
+            configButton.onClick.AddListener(() => SetOpen(true));
+
         SetOpen(false);
-    }
-
-    private void Update()
-    {
-        if (!_holding)
-            return;
-
-        if (Time.unscaledTime - _holdStart >= holdSeconds)
-        {
-            _holding = false;
-            SetOpen(true);
-        }
-    }
-
-    public void OnPointerDown(PointerEventData eventData)
-    {
-        if (_panel != null && _panel.gameObject.activeSelf)
-            return;
-
-        _holding = true;
-        _holdStart = Time.unscaledTime;
-    }
-
-    public void OnPointerUp(PointerEventData eventData)
-    {
-        _holding = false;
-    }
-
-    public void OnPointerExit(PointerEventData eventData)
-    {
-        _holding = false;
     }
 
     private void Connect()
@@ -85,8 +58,12 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
             return;
 
         _panel.gameObject.SetActive(open);
+        if (network != null)
+            network.SetStatusVisible(open);
         if (!open)
             return;
+
+        _panel.SetAsLastSibling();
 
         if (_input != null)
         {
@@ -95,8 +72,10 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
         }
 
         SetStatus(network != null && network.IsConnected
-            ? "Connected. Long-press the top edge again if you need to change IP."
-            : "Tablet and wall PC must be on the same Wi-Fi.");
+            ? "Connected. Tap Config again if you need to change the IP."
+            : "Both ethernet cables must be on the same network. With no router, set this tablet's Ethernet IP to "
+              + WindowsLanSetup.DirectTabletIp + ", mask 255.255.255.0, gateway blank. The wall PC is "
+              + WindowsLanSetup.DirectWallIp + ".");
     }
 
     private void SetStatus(string message)
@@ -105,39 +84,36 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
             _status.text = message;
     }
 
-    private void EnsureUi()
+    private void EnsureDialog()
     {
-        var rt = (RectTransform)transform;
-        rt.anchorMin = new Vector2(0.5f, 1f);
-        rt.anchorMax = new Vector2(0.5f, 1f);
-        rt.pivot = new Vector2(0.5f, 1f);
-        rt.anchoredPosition = Vector2.zero;
-        rt.sizeDelta = new Vector2(420f, 90f);
-
-        var hit = GetComponent<Image>();
-        if (hit == null)
-            hit = gameObject.AddComponent<Image>();
-        hit.color = new Color(1f, 1f, 1f, 0.01f);
-        hit.raycastTarget = true;
-
         Transform existing = transform.Find("Panel");
+        if (existing == null)
+        {
+            Canvas canvas = GetComponentInParent<Canvas>();
+            if (canvas != null)
+                existing = canvas.transform.Find("WallIpPanel");
+        }
+
         if (existing != null)
         {
             _panel = (RectTransform)existing;
             _input = _panel.GetComponentInChildren<TMP_InputField>(true);
-            var statusGo = _panel.Find("Status");
+            Transform statusGo = _panel.Find("Status");
             if (statusGo != null)
                 _status = statusGo.GetComponent<TMP_Text>();
+            WireDialogButtons();
             return;
         }
 
-        var panelGo = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(CanvasGroup));
-        panelGo.transform.SetParent(transform, false);
+        Canvas parentCanvas = GetComponentInParent<Canvas>();
+        Transform parent = parentCanvas != null ? parentCanvas.transform : transform;
+
+        var panelGo = new GameObject("WallIpPanel", typeof(RectTransform), typeof(Image));
+        panelGo.transform.SetParent(parent, false);
         _panel = (RectTransform)panelGo.transform;
-        _panel.anchorMin = new Vector2(0.5f, 1f);
-        _panel.anchorMax = new Vector2(0.5f, 1f);
-        _panel.pivot = new Vector2(0.5f, 1f);
-        _panel.anchoredPosition = new Vector2(0f, -8f);
+        _panel.anchorMin = _panel.anchorMax = new Vector2(0.5f, 0.5f);
+        _panel.pivot = new Vector2(0.5f, 0.5f);
+        _panel.anchoredPosition = Vector2.zero;
         _panel.sizeDelta = new Vector2(760f, 280f);
         var panelImage = panelGo.GetComponent<Image>();
         panelImage.color = new Color(0.02f, 0.06f, 0.18f, 0.94f);
@@ -146,14 +122,42 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
         var title = CreateTmp("Title", _panel, "Wall IP", 28f, new Vector2(0f, -28f), new Vector2(700f, 40f));
         title.color = Color.white;
 
-        _input = CreateInput(_panel, "IpInput", "192.168.1.10", new Vector2(0f, -90f), new Vector2(700f, 56f));
+        _input = CreateInput(_panel, "IpInput", "192.168.1.10", new Vector2(0f, -118f), new Vector2(700f, 56f));
         _input.onSubmit.AddListener(_ => Connect());
 
-        CreateButton(_panel, "ConnectButton", "Connect", new Vector2(-90f, -168f), new Vector2(200f, 48f), Connect);
-        CreateButton(_panel, "CloseButton", "Close", new Vector2(130f, -168f), new Vector2(180f, 48f), () => SetOpen(false));
+        CreateButton(_panel, "ConnectButton", "Connect", new Vector2(-110f, -196f), new Vector2(200f, 48f), Connect);
+        CreateButton(_panel, "CloseButton", "Close", new Vector2(110f, -196f), new Vector2(180f, 48f), () => SetOpen(false));
 
-        _status = CreateTmp("Status", _panel, string.Empty, 18f, new Vector2(0f, -230f), new Vector2(720f, 36f));
+        _status = CreateTmp("Status", _panel, string.Empty, 18f, new Vector2(0f, -250f), new Vector2(720f, 36f));
         _status.color = new Color(0.75f, 0.9f, 1f, 1f);
+    }
+
+    private void WireDialogButtons()
+    {
+        Bind(_panel.Find("ConnectButton"), Connect);
+        Bind(_panel.Find("CloseButton"), () => SetOpen(false));
+    }
+
+    private static void Bind(Transform target, UnityEngine.Events.UnityAction action)
+    {
+        if (target == null)
+            return;
+
+        Button button = target.GetComponent<Button>();
+        if (button == null)
+            return;
+
+        button.onClick.RemoveAllListeners();
+        button.onClick.AddListener(action);
+    }
+
+    private static TMP_FontAsset Font()
+    {
+        if (TMP_Settings.defaultFontAsset != null)
+            return TMP_Settings.defaultFontAsset;
+
+        TextMeshProUGUI sample = FindAnyObjectByType<TextMeshProUGUI>();
+        return sample != null ? sample.font : null;
     }
 
     private static TextMeshProUGUI CreateTmp(string name, Transform parent, string text, float size, Vector2 pos, Vector2 sizeDelta)
@@ -166,6 +170,7 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
         rt.anchoredPosition = pos;
         rt.sizeDelta = sizeDelta;
         var tmp = go.GetComponent<TextMeshProUGUI>();
+        tmp.font = Font();
         tmp.text = text;
         tmp.fontSize = size;
         tmp.alignment = TextAlignmentOptions.Center;
@@ -188,8 +193,14 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
         var input = go.GetComponent<TMP_InputField>();
         input.contentType = TMP_InputField.ContentType.Standard;
         input.characterLimit = 45;
+        TMP_FontAsset font = Font();
+        if (input.textComponent != null)
+            input.textComponent.font = font;
         if (input.placeholder is TMP_Text ph)
+        {
             ph.text = placeholder;
+            ph.font = font;
+        }
         return input;
     }
 
@@ -207,6 +218,7 @@ public class HostIpPanel : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
         var tmp = go.GetComponentInChildren<TextMeshProUGUI>();
         if (tmp != null)
         {
+            tmp.font = Font();
             tmp.text = label;
             tmp.fontSize = 22;
         }

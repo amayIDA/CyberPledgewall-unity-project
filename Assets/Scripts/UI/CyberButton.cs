@@ -28,6 +28,7 @@ public class CyberButton : MonoBehaviour, IPointerEnterHandler, IPointerExitHand
     private void Awake()
     {
         button = GetComponent<Button>();
+        baseScale = transform.localScale;
         offset = Random.value * 3f;
     }
 

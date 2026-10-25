@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using TMPro;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 public class WallManager : MonoBehaviour
 {
@@ -12,6 +13,7 @@ public class WallManager : MonoBehaviour
     [SerializeField] private WallBoard board;
     [SerializeField] private TMP_Text statusText;
     [SerializeField] private GameObject wallReceiverPrefab;
+    private bool statusVisible;
 
 
 private void Awake()
@@ -27,6 +29,8 @@ private void Awake()
                 statusText = status.GetComponent<TMP_Text>();
         }
 
+        SetStatusVisible(false);
+
         var clearButtonGo = GameObject.Find("ClearAllButton");
         if (clearButtonGo != null)
         {
@@ -40,6 +44,17 @@ private void Awake()
     {
         if (Instance == this)
             Instance = null;
+    }
+
+    private void Update()
+    {
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null)
+            return;
+
+        bool ctrl = keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed;
+        if (ctrl && keyboard.aKey.wasPressedThisFrame)
+            SetStatusVisible(!statusVisible);
     }
 
 private void Start()
@@ -81,14 +96,29 @@ private void Start()
         }
 
         SpawnWallReceiver(nm);
-        string lan = GetLanIPv4();
+        string nic;
+        string lan = LanAddress.Best(out nic);
         config.detectedHostAddress = lan;
         AppConfig.SaveWall(config);
 
-        string message = $"Host listening on {lan}:{config.port}";
+        var beacon = gameObject.GetComponent<WallBeaconHost>();
+        if (beacon == null)
+            beacon = gameObject.AddComponent<WallBeaconHost>();
+        beacon.Begin(config.port);
+
+        string setup = WindowsLanSetup.Prepare(config.port, lan);
+        string where = string.IsNullOrEmpty(nic) ? lan : lan + " (" + nic + ")";
+        string message = setup ?? $"Tablet connects to {where}:{config.port}";
         Debug.Log(message);
         if (statusText != null)
-            statusText.text = config.showHostStatus ? message : string.Empty;
+        {
+            statusText.text = message;
+            if (setup != null)
+            {
+                statusText.color = new Color(1f, 0.85f, 0.45f, 1f);
+                statusText.fontSize = 28f;
+            }
+        }
     }
 
     private void SpawnWallReceiver(NetworkManager nm)
@@ -206,29 +236,15 @@ public void LoadSavedPledgesOntoWall()
             statusText.text = message;
     }
 
+    private void SetStatusVisible(bool visible)
+    {
+        statusVisible = visible;
+        if (statusText != null)
+            statusText.gameObject.SetActive(visible);
+    }
+
     private static string GetLanIPv4()
     {
-        try
-        {
-            foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (nic.OperationalStatus != OperationalStatus.Up)
-                    continue;
-                if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
-                    continue;
-
-                foreach (UnicastIPAddressInformation addr in nic.GetIPProperties().UnicastAddresses)
-                {
-                    if (addr.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(addr.Address))
-                        return addr.Address.ToString();
-                }
-            }
-        }
-        catch
-        {
-            // Fall through to localhost.
-        }
-
-        return "127.0.0.1";
+        return LanAddress.Best();
     }
 }

@@ -8,7 +8,10 @@ using UnityEngine;
 public class NetworkSession : MonoBehaviour
 {
     public const ushort DefaultPort = 7777;
+    public const ushort BeaconPort = 7778;
     public const int DefaultMaxPayloadSize = 2097152;
+
+    private static NetworkSession instance;
 
     [SerializeField] private GameObject wallReceiverPrefab;
     [SerializeField] private ushort port = DefaultPort;
@@ -23,6 +26,13 @@ public class NetworkSession : MonoBehaviour
 
 private void Awake()
     {
+        if (instance != null && instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        instance = this;
         DontDestroyOnLoad(gameObject);
 
         var nm = GetComponent<NetworkManager>();

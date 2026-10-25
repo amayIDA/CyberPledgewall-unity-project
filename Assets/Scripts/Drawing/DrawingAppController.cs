@@ -13,6 +13,8 @@ public class DrawingAppController : MonoBehaviour
 
     private DrawingConfig config;
     private Coroutine waitRoutine;
+    private bool reconnectBusy;
+    private string attemptingHost;
 
     public bool IsConnected => NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
     public string CurrentHost => config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
@@ -30,6 +32,7 @@ public class DrawingAppController : MonoBehaviour
         }
 
         config = AppConfig.LoadDrawing();
+        SetStatusVisible(false);
     }
 
     private void Start()
@@ -44,17 +47,29 @@ public class DrawingAppController : MonoBehaviour
         nm.OnClientConnectedCallback += HandleClientConnected;
         nm.OnClientDisconnectCallback += HandleClientDisconnected;
 
+        if (GetComponent<WallBeaconClient>() == null)
+            gameObject.AddComponent<WallBeaconClient>();
+
         if (config != null && config.autoConnect)
             StartCoroutine(AutoConnectLoop());
+    }
+
+    private void Update()
+    {
+        if (!WallBeaconClient.HasFound)
+            return;
+
+        UseDiscoveredHost(WallBeaconClient.FoundIp, WallBeaconClient.FoundPort);
     }
 
     private System.Collections.IEnumerator AutoConnectLoop()
     {
         float interval = Mathf.Max(1f, config.retryIntervalSeconds);
+        yield return new WaitForSeconds(1.5f);
         while (true)
         {
             var nm = NetworkManager.Singleton;
-            if (nm != null && !nm.IsListening)
+            if (nm != null && !nm.IsListening && !reconnectBusy)
                 ConnectToWall();
 
             yield return new WaitForSeconds(interval);
@@ -90,6 +105,7 @@ public class DrawingAppController : MonoBehaviour
 
         string ip = config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
         ushort port = config != null ? config.port : NetworkSession.DefaultPort;
+        attemptingHost = ip;
 
         var session = nm.GetComponent<NetworkSession>();
         if (session != null)
@@ -129,7 +145,38 @@ public class DrawingAppController : MonoBehaviour
         if (nm != null && nm.IsListening)
             nm.Shutdown();
 
-        SetStatus($"Could not reach wall at {ip}:{port}. Long-press the top of the screen and enter the wall PC IP.");
+        SetStatus($"Could not reach wall at {ip}:{port}. " + WindowsLanSetup.DirectCableInstructions);
+    }
+
+    private void UseDiscoveredHost(string ip, ushort port)
+    {
+        if (string.IsNullOrEmpty(ip) || reconnectBusy)
+            return;
+        if (config != null && AppConfig.IsRealHost(config.hostAddress) && config.hostAddress != ip)
+            return;
+        if (IsConnected && CurrentHost == ip)
+            return;
+
+        var nm = NetworkManager.Singleton;
+        if (attemptingHost == ip && nm != null && nm.IsListening)
+            return;
+
+        if (config == null)
+            config = AppConfig.LoadDrawing();
+
+        bool changed = config.hostAddress != ip || config.port != port;
+        config.hostAddress = ip;
+        config.port = port;
+        if (changed)
+            AppConfig.SaveDrawing(config);
+
+        if (nm != null && nm.IsListening)
+        {
+            StartCoroutine(Reconnect());
+            return;
+        }
+
+        ConnectToWall();
     }
 
     public void ApplyHostAddress(string ip)
@@ -144,6 +191,7 @@ public class DrawingAppController : MonoBehaviour
 
     private System.Collections.IEnumerator Reconnect()
     {
+        reconnectBusy = true;
         var nm = NetworkManager.Singleton;
         if (nm != null && (nm.IsListening || nm.IsConnectedClient))
             nm.Shutdown();
@@ -157,6 +205,7 @@ public class DrawingAppController : MonoBehaviour
         }
 
         ConnectToWall();
+        reconnectBusy = false;
     }
 
     private readonly System.Collections.Generic.HashSet<string> acknowledged = new System.Collections.Generic.HashSet<string>();
@@ -246,5 +295,11 @@ public class DrawingAppController : MonoBehaviour
         Debug.Log(message);
         if (statusText != null)
             statusText.text = message;
+    }
+
+    public void SetStatusVisible(bool visible)
+    {
+        if (statusText != null)
+            statusText.gameObject.SetActive(visible);
     }
 }
