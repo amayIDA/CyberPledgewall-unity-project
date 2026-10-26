@@ -15,6 +15,7 @@ public class DrawingAppController : MonoBehaviour
     private Coroutine waitRoutine;
     private bool reconnectBusy;
     private string attemptingHost;
+    private bool resumeReconnect;
 
     public bool IsConnected => NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
     public string CurrentHost => config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
@@ -33,6 +34,9 @@ public class DrawingAppController : MonoBehaviour
 
         config = AppConfig.LoadDrawing();
         SetStatusVisible(false);
+        DrawingKiosk.KeepScreenOn();
+        Application.runInBackground = true;
+        Screen.sleepTimeout = SleepTimeout.NeverSleep;
     }
 
     private void Start()
@@ -50,8 +54,7 @@ public class DrawingAppController : MonoBehaviour
         if (GetComponent<WallBeaconClient>() == null)
             gameObject.AddComponent<WallBeaconClient>();
 
-        if (config != null && config.autoConnect)
-            StartCoroutine(AutoConnectLoop());
+        StartCoroutine(AutoConnectLoop());
     }
 
     private void Update()
@@ -64,16 +67,71 @@ public class DrawingAppController : MonoBehaviour
 
     private System.Collections.IEnumerator AutoConnectLoop()
     {
-        float interval = Mathf.Max(1f, config.retryIntervalSeconds);
-        yield return new WaitForSeconds(1.5f);
+        const float interval = 60f;
+        yield return new WaitForSecondsRealtime(1.5f);
         while (true)
         {
-            var nm = NetworkManager.Singleton;
-            if (nm != null && !nm.IsListening && !reconnectBusy)
-                ConnectToWall();
-
-            yield return new WaitForSeconds(interval);
+            config = AppConfig.LoadDrawing();
+            EnsureConnected();
+            yield return new WaitForSecondsRealtime(interval);
         }
+    }
+
+    private void OnApplicationPause(bool paused)
+    {
+        if (paused)
+        {
+            resumeReconnect = true;
+            return;
+        }
+
+        DrawingKiosk.KeepScreenOn();
+        if (resumeReconnect)
+        {
+            resumeReconnect = false;
+            StartCoroutine(Reconnect());
+        }
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (!hasFocus)
+        {
+            resumeReconnect = true;
+            return;
+        }
+
+        DrawingKiosk.KeepScreenOn();
+        if (resumeReconnect)
+        {
+            resumeReconnect = false;
+            StartCoroutine(Reconnect());
+        }
+    }
+
+    private void EnsureConnected()
+    {
+        if (reconnectBusy)
+            return;
+
+        if (config == null || !AppConfig.IsRealHost(config.hostAddress))
+            return;
+
+        var nm = NetworkManager.Singleton;
+        if (nm == null)
+            return;
+
+        if (nm.IsConnectedClient)
+            return;
+
+        Debug.Log("Wall connection check: not connected, reconnecting to " + config.hostAddress);
+        if (nm.IsListening)
+        {
+            StartCoroutine(Reconnect());
+            return;
+        }
+
+        ConnectToWall();
     }
 
     private void OnDisable()
@@ -100,8 +158,14 @@ public class DrawingAppController : MonoBehaviour
             return;
         }
 
-        if (nm.IsConnectedClient || nm.IsListening)
+        if (nm.IsConnectedClient)
             return;
+
+        if (nm.IsListening)
+        {
+            StartCoroutine(Reconnect());
+            return;
+        }
 
         string ip = config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
         ushort port = config != null ? config.port : NetworkSession.DefaultPort;
@@ -285,9 +349,12 @@ public class DrawingAppController : MonoBehaviour
 
         string reason = NetworkManager.Singleton.DisconnectReason;
         if (string.IsNullOrEmpty(reason))
-            SetStatus("Disconnected from wall. Is WallScene hosting on that IP?");
+            SetStatus("Disconnected from wall. Reconnecting...");
         else
             SetStatus($"Disconnected: {reason}");
+
+        if (!reconnectBusy)
+            StartCoroutine(Reconnect());
     }
 
     public void SetStatus(string message)

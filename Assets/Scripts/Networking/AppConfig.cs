@@ -17,7 +17,7 @@ public class DrawingConfig
     public string hostAddress = "127.0.0.1";
     public ushort port = NetworkSession.DefaultPort;
     public bool autoConnect = true;
-    public float retryIntervalSeconds = 5f;
+    public float retryIntervalSeconds = 60f;
 }
 
 /// <summary>
