@@ -1,0 +1,169 @@
+{
+  "figmaFile": "lktNJerZUzGF27a9hGv8w5",
+  "screens": {
+    "register": "4:11",
+    "draw": "4:46",
+    "wall": "4:66"
+  },
+  "referenceResolution": [
+    3840,
+    2160
+  ],
+  "unityReferenceResolution": [
+    1920,
+    1080
+  ],
+  "font": "Lato, SIL Open Font License (Fonts/OFL.txt)",
+  "vectorRasterization": "Original Figma SVGs rendered with resvg at their intrinsic dimensions; SVG sources retained.",
+  "glassCompositing": "Normal glass over outer glow; inner screen layer; composite screened over scene background.",
+  "assets": [
+    {
+      "file": "Draw_imgAnswerFieldVectors.png",
+      "bytes": 18941
+    },
+    {
+      "file": "Draw_imgBackground.png",
+      "bytes": 1938444
+    },
+    {
+      "file": "Draw_imgGroup.png",
+      "bytes": 10146
+    },
+    {
+      "file": "Draw_imgGroup1.png",
+      "bytes": 15515
+    },
+    {
+      "file": "Draw_imgGroup2.png",
+      "bytes": 12273
+    },
+    {
+      "file": "Draw_imgGroup3.png",
+      "bytes": 6931
+    },
+    {
+      "file": "Draw_imgOriginalGlassGlow.png",
+      "bytes": 307329
+    },
+    {
+      "file": "Draw_imgOriginalGlassTexture.png",
+      "bytes": 3373540
+    },
+    {
+      "file": "Draw_imgOriginalGlow.png",
+      "bytes": 162765
+    },
+    {
+      "file": "Draw_imgVector.png",
+      "bytes": 88
+    },
+    {
+      "file": "Register_imgBackground.png",
+      "bytes": 1938444
+    },
+    {
+      "file": "Register_imgGroup.png",
+      "bytes": 10146
+    },
+    {
+      "file": "Register_imgGroup1.png",
+      "bytes": 15515
+    },
+    {
+      "file": "Register_imgGroup2.png",
+      "bytes": 8192
+    },
+    {
+      "file": "Register_imgOriginalGlassGlow.png",
+      "bytes": 121048
+    },
+    {
+      "file": "Register_imgOriginalGlassTexture.png",
+      "bytes": 84263
+    },
+    {
+      "file": "Register_imgVector.png",
+      "bytes": 88
+    },
+    {
+      "file": "Wall_imgBackground.png",
+      "bytes": 1938444
+    },
+    {
+      "file": "Wall_imgGroup.png",
+      "bytes": 10146
+    },
+    {
+      "file": "Wall_imgGroup1.png",
+      "bytes": 15515
+    },
+    {
+      "file": "Wall_imgGroup2.png",
+      "bytes": 53507
+    },
+    {
+      "file": "Wall_imgGroup3.png",
+      "bytes": 53523
+    },
+    {
+      "file": "Wall_imgGroup4.png",
+      "bytes": 53508
+    },
+    {
+      "file": "Wall_imgGroup5.png",
+      "bytes": 53521
+    },
+    {
+      "file": "Wall_imgGroup6.png",
+      "bytes": 98979
+    },
+    {
+      "file": "Wall_imgOriginalGlassTexture.png",
+      "bytes": 1171523
+    },
+    {
+      "file": "Wall_imgOriginalInnerGlow.png",
+      "bytes": 11981
+    },
+    {
+      "file": "Wall_imgOriginalInnerGlow1.png",
+      "bytes": 11964
+    },
+    {
+      "file": "Wall_imgOriginalInnerGlow2.png",
+      "bytes": 11856
+    },
+    {
+      "file": "Wall_imgOriginalInnerGlow3.png",
+      "bytes": 11853
+    },
+    {
+      "file": "Wall_imgOriginalInnerGlow4.png",
+      "bytes": 21767
+    },
+    {
+      "file": "Wall_imgOriginalOuterGlow.png",
+      "bytes": 162765
+    },
+    {
+      "file": "Wall_imgOriginalOuterGlow1.png",
+      "bytes": 163631
+    },
+    {
+      "file": "Wall_imgOriginalOuterGlow2.png",
+      "bytes": 163019
+    },
+    {
+      "file": "Wall_imgOriginalOuterGlow3.png",
+      "bytes": 163633
+    },
+    {
+      "file": "Wall_imgOriginalOuterGlow4.png",
+      "bytes": 203851
+    },
+    {
+      "file": "Wall_imgVector.png",
+      "bytes": 88
+    }
+  ]
+}

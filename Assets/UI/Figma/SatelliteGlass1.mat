@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: SmallGlassComposite
+  m_Shader: {fileID: 4800000, guid: 32ff51505c3e3f745a1bb04a98da6863, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _GlassTex:
+        m_Texture: {fileID: 2800000, guid: fb2f41fa1f611a044801113a5faf4bf6, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _InnerTex:
+        m_Texture: {fileID: 2800000, guid: 8c58f0279375dc24ba226171759d7fcd, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _InnerEnabled: 1
+    m_Colors:
+    - _GlassRect: {r: 0.2047146, g: 0.20385076, b: 0.5916291, a: 0.5918716}
+    - _InnerRect: {r: 0.09401885, g: 0.09344263, b: 0.8133961, a: 0.8131148}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

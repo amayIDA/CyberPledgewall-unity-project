@@ -20,8 +20,9 @@ public enum BrushTool
 [RequireComponent(typeof(RawImage))]
 public class DrawingCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, IPointerUpHandler
 {
-    public const int TextureWidth = 960;
-    public const int TextureHeight = 448;
+    // Matches the Figma writing surface (3:1), so handwriting keeps its shape on the wall.
+    public const int TextureWidth = 1200;
+    public const int TextureHeight = 400;
     private const int MaxUndo = 20;
     private const float MinSampleSpacing = 1.15f;
     private const float TaperDistance = 28f;

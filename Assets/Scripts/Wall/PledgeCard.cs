@@ -4,7 +4,7 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// One neon card on the wall: the visitor's handwriting rendered as white ink, with their name beneath.
+/// One glass card on the wall: the visitor's handwriting rendered as white ink, with their name beneath.
 /// WallBoard can drive pose (carousel / hero); otherwise the card bobs in place.
 /// </summary>
 public class PledgeCard : MonoBehaviour
@@ -21,11 +21,15 @@ public class PledgeCard : MonoBehaviour
     private Coroutine routine;
     private float bobPhase;
     private float flash;
+    private float highlightUntil;
+    public bool IsHighlighted => Time.unscaledTime < highlightUntil;
+    public void HighlightFor(float seconds) => highlightUntil = Time.unscaledTime + seconds;
     private bool hasPledge;
     private bool posedExternally;
     private Vector2 restPosition;
 
     public bool HasPledge => hasPledge;
+    public float RestingAlpha => hasPledge ? 1f : emptyAlpha;
     public RectTransform Rect => rt != null ? rt : (rt = (RectTransform)transform);
 
     private void Awake()
@@ -66,7 +70,9 @@ public class PledgeCard : MonoBehaviour
 
         float shimmer = hasPledge ? 0.12f + 0.1f * Mathf.Sin(time * 1.3f) : 0f;
         Color c = glow.color;
-        c.a = Mathf.Max(shimmer, flash);
+        float left=highlightUntil-Time.unscaledTime;
+        float accent=left>0?(0.34f+0.08f*Mathf.Sin(time*2f))*Mathf.SmoothStep(0,1,Mathf.Clamp01(left/1.5f)):0;
+        c.a = Mathf.Max(Mathf.Max(shimmer, flash),accent);
         glow.color = c;
     }
 
@@ -222,6 +228,8 @@ public class PledgeCard : MonoBehaviour
         if (routine != null)
             StopCoroutine(routine);
         routine = null;
+        if(punchRoutine != null) StopCoroutine(punchRoutine);
+        punchRoutine=null;
         if (restoreRoutine != null)
             StopCoroutine(restoreRoutine);
         restoreRoutine = null;
@@ -275,6 +283,15 @@ public class PledgeCard : MonoBehaviour
         Vector2 center = Rect.rect.center;
         scanCore.rectTransform.anchoredPosition = scanGlow.rectTransform.anchoredPosition = new Vector2(local.x, center.y);
         scanCore.transform.SetAsLastSibling();
+    }
+
+    public void SetInkBloom(float progress)
+    {
+        if (inkMask != null) inkMask.enabled=false;
+        if (scanCore != null) {scanCore.gameObject.SetActive(false);scanGlow.gameObject.SetActive(false);}
+        if(drawingImage == null)return;
+        drawingImage.color = new Color(1,1,1,Mathf.Clamp01(progress));
+        drawingImage.rectTransform.localScale = Vector3.one * Mathf.Lerp(0.92f,1,Mathf.Clamp01(progress));
     }
 
     public void SetNameProgress(float p)
@@ -369,6 +386,7 @@ public class PledgeCard : MonoBehaviour
 
     private void ApplyContent(string visitorName, byte[] drawingBytes)
     {
+        highlightUntil=0;
         ClearReveal();
         if (nameText == null)
             nameText = GetComponentInChildren<TMP_Text>(true);

@@ -19,7 +19,8 @@ public class SceneVideoBackground : MonoBehaviour
     private VideoPlayer _player;
     private VideoClip _pending;
     private bool _drawMode;
-    private bool _prepared;
+    private bool _preparing;
+    private bool _resumePlayback;
 
     private void Awake()
     {
@@ -29,6 +30,7 @@ public class SceneVideoBackground : MonoBehaviour
 
         _image.color = Color.white;
         _image.raycastTarget = false;
+        _image.enabled = false; // Keep the authored fallback visible until a frame is ready.
         _fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
         _fitter.aspectRatio = 16f / 9f;
 
@@ -49,7 +51,7 @@ public class SceneVideoBackground : MonoBehaviour
 
     private void OnEnable()
     {
-        if (_pending != null && _player != null && !_player.isPlaying)
+        if (_pending != null && _player != null && !_player.isPlaying && !_preparing)
             Begin(_pending);
     }
 
@@ -59,8 +61,26 @@ public class SceneVideoBackground : MonoBehaviour
             return;
 
         Texture frame = _player.texture;
-        if (frame != null && _image.texture != frame)
-            _image.texture = frame;
+        if (frame != null && _player.isPlaying && _player.frame >= 0)
+        {
+            if (_image.texture != frame) _image.texture = frame;
+            _image.enabled = true;
+        }
+    }
+
+    private void OnApplicationPause(bool paused)
+    {
+        if (_player == null || _pending == null) return;
+        if (paused)
+        {
+            _resumePlayback = true;
+            _player.Pause();
+        }
+        else if (_resumePlayback)
+        {
+            _resumePlayback = false;
+            if (_player.isPrepared) _player.Play(); else Begin(_pending);
+        }
     }
 
     private void OnDestroy()
@@ -98,7 +118,7 @@ public class SceneVideoBackground : MonoBehaviour
         if (clip == null || _player == null)
             return;
 
-        if (_pending == clip && (_player.isPlaying || _player.isPrepared))
+        if (_pending == clip && (_preparing || _player.isPlaying || _player.isPrepared))
             return;
 
         Begin(clip);
@@ -107,7 +127,8 @@ public class SceneVideoBackground : MonoBehaviour
     private void Begin(VideoClip clip)
     {
         _pending = clip;
-        _prepared = false;
+        _preparing = true;
+        if (_image != null) _image.enabled = false;
         _player.Stop();
         _player.clip = clip;
         ApplyAspect(clip);
@@ -116,7 +137,7 @@ public class SceneVideoBackground : MonoBehaviour
 
     private void HandlePrepared(VideoPlayer source)
     {
-        _prepared = true;
+        _preparing = false;
         ApplyAspect(source.clip);
         if (_image != null && source.texture != null)
             _image.texture = source.texture;
@@ -131,6 +152,8 @@ public class SceneVideoBackground : MonoBehaviour
 
     private void HandleError(VideoPlayer source, string message)
     {
+        _preparing = false;
+        if (_image != null) _image.enabled = false;
         Debug.LogError("Video background failed: " + message);
         VideoClip fallback = _drawMode ? idleClip : drawClip;
         if (fallback != null && fallback != _pending)

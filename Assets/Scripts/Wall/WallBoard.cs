@@ -5,27 +5,31 @@ using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 /// <summary>
-/// Neon grid starts at 6 slots and grows to 12 as pledges arrive. New submissions play the
-/// center-stage spin, then return to the grid. After two idle minutes the wall flips a few
-/// cards to drawings that have been off-screen the longest.
+/// Five-card Figma constellation with the newest pledge at the center. New submissions
+/// unfurl through a magnetic glass aperture; older pledges rotate through the satellites
+/// every five idle seconds.
 /// </summary>
 public class WallBoard : MonoBehaviour
 {
-    public const int MaxVisible = 12;
-    private const int MinVisible = 6;
+    public const int MaxVisible = 5;
+    private const int MinVisible = 5;
     private const int SparkCount = 120;
 
     [SerializeField] private PledgeCard[] cards;
     [SerializeField] private PledgeCard heroCard;
     [SerializeField] private Vector2 heroCardSize = new Vector2(920f, 530f);
-    [SerializeField] private float idleSeconds = 120f;
-    [SerializeField] private float gridGap = 56f;
+    [SerializeField, Min(1f)] private float idleSeconds = 5f;
 
     [Header("Arrival animation (tweak live in Play mode)")]
-    [SerializeField] private float flyInSeconds = 1.2f;
-    [SerializeField] private float scanSeconds = 2.0f;
+    [SerializeField, Range(1.5f, 3.5f)] private float flyInSeconds = 2.15f;
+    [SerializeField] private float chargeSeconds = 0.48f;
     [SerializeField] private float holdSeconds = 1.0f;
     [SerializeField] private float swoopSeconds = 1.05f;
+
+    [Header("3D pledge history prelude")]
+    [SerializeField] private bool showHistoryFlight = true;
+    [SerializeField, Range(3f, 9f)] private float historyFlightSeconds = 5.8f;
+    private PledgeHistoryFlight historyFlight;
 
     [Header("Preview")]
     [Tooltip("Press this key in the editor / dev builds to replay the arrival animation with a made-up pledge.")]
@@ -91,9 +95,11 @@ public class WallBoard : MonoBehaviour
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         if (started && Keyboard.current != null && Keyboard.current[previewKey].wasPressedThisFrame)
             PlayPreview();
+        if (started && Keyboard.current != null && Keyboard.current[Key.Digit2].wasPressedThisFrame)
+            PlayJourneyPreview();
 #endif
 
-        if (!started || featureRoutine != null || items.Count == 0)
+        if (!started || featureRoutine != null || idleRoutine != null || items.Count <= SlotCount)
             return;
 
         if (Time.unscaledTime - lastActivity < idleSeconds)
@@ -116,6 +122,7 @@ public class WallBoard : MonoBehaviour
         {
             StopCoroutine(idleRoutine);
             idleRoutine = null;
+            foreach(var card in pool)card.CancelRoutine();
         }
 
         pendingFeature = true;
@@ -138,6 +145,8 @@ public class WallBoard : MonoBehaviour
     {
         pendingFeature = false;
         items.Clear();
+        NoteActivity();
+        if (historyFlight != null) historyFlight.Hide();
         for (int i = 0; i < slotItem.Length; i++)
             slotItem[i] = -1;
         if (featureRoutine != null)
@@ -153,8 +162,14 @@ public class WallBoard : MonoBehaviour
         }
 
         HideHero();
+        if(revealFx!=null)revealFx.SetState(0,0);
         if (started)
             ShowGrid(-1, false);
+    }
+
+    private void OnDisable()
+    {
+        if (historyFlight != null) historyFlight.Hide();
     }
 
     private void NoteActivity()
@@ -169,7 +184,12 @@ public class WallBoard : MonoBehaviour
 
     /// <summary>Replays the arrival animation with a generated scribble. Nothing is saved to disk.</summary>
     [ContextMenu("Play Preview Arrival")]
-    public void PlayPreview()
+    public void PlayPreview() => BeginPreview(false);
+
+    [ContextMenu("Preview 3D Journey With Sample History")]
+    public void PlayJourneyPreview() => BeginPreview(true);
+
+    private void BeginPreview(bool sampleHistory)
     {
         if (!started)
             return;
@@ -180,10 +200,22 @@ public class WallBoard : MonoBehaviour
             StopCoroutine(featureRoutine);
             featureRoutine = null;
             HideHero();
+            if(revealFx!=null)revealFx.SetState(0,0);
         }
+        if (historyFlight != null) historyFlight.Hide();
 
+        if (idleRoutine != null)
+        {
+            StopCoroutine(idleRoutine);idleRoutine=null;
+            foreach(var card in pool)card.CancelRoutine();
+        }
         pendingFeature = false;
         items.RemoveAll(i => i.isPreview);
+        if (sampleHistory)
+        {
+            for (int i = 0; i < 12; i++)
+                items.Add(new Item { name = PreviewNames[i % PreviewNames.Length], drawing = MakePreviewDrawing(), isPreview = true });
+        }
 
         items.Add(new Item
         {
@@ -324,7 +356,7 @@ public class WallBoard : MonoBehaviour
 
     private static readonly Color[] SparkColors =
     {
-        new Color(0.55f, 0.92f, 1f), new Color(1f, 1f, 1f), new Color(1f, 0.82f, 0.35f), new Color(0.45f, 0.7f, 1f)
+        new Color(0.55f, 0.92f, 1f), new Color(1f, 1f, 1f), new Color(0.24f, 0.62f, 1f), new Color(0.45f, 0.7f, 1f)
     };
 
     private void Burst(Vector3 origin, int count, float speed)
@@ -386,146 +418,145 @@ public class WallBoard : MonoBehaviour
                 break;
 
             // Several arrivals at once: the newest gets the stage, the rest land in the grid.
-            yield return PlayArrival(items[items.Count - 1]);
+            int arrivingIndex = items.Count - 1;
+            yield return PlayArrival(items[arrivingIndex], arrivingIndex);
         }
 
         NoteActivity();
         featureRoutine = null;
     }
 
-    private IEnumerator PlayArrival(Item item)
+    private PledgeRevealFx revealFx;
+    private void EnsureRevealFx()
     {
-        EnsurePool();
-        EnsureSparks();
-        RefreshDepth();
-
-        int slots = SlotCount;
-        GetLayout(slots, out Vector2 cardSize, out _, out _);
-        Vector2 slotPos = GridPosition(0, slots);
-        PledgeCard hero = GetHero();
-        hero.CancelRoutine();
-        HideHero();
-
-        // 1. The grid recedes into the background and re-flows for the new slot count.
-        yield return DimGrid(slots, cardSize);
-
-        // 2. Re-seat content under the dim; slot 0 stays empty until the hero lands in it.
-        FillSlotsWithNewest(slots);
-        for (int i = 0; i < slots; i++)
+        if(revealFx!=null)return;
+        var go=new GameObject("MagneticAperture",typeof(RectTransform),typeof(CanvasRenderer),typeof(PledgeRevealFx));
+        go.transform.SetParent(transform.parent,false);
+        var rect=(RectTransform)go.transform;
+        rect.anchorMin=rect.anchorMax=rect.pivot=new Vector2(0.5f,0.5f);
+        rect.anchoredPosition=DesignPosition(0);rect.sizeDelta=new Vector2(1000,1000);
+        revealFx=go.GetComponent<PledgeRevealFx>();revealFx.raycastTarget=false;
+        revealFx.SetState(0,0);
+    }
+    private IEnumerator PlayArrival(Item item, int arrivingIndex)
+    {
+        EnsurePool();EnsureRevealFx();RefreshDepth();
+        revealFx.SetState(0,0);
+        int slots=SlotCount;
+        Vector2 slotPos=DesignPosition(0);
+        var hero=GetHero();hero.CancelRoutine();HideHero();
+        revealFx.transform.SetAsLastSibling();
+        if (showHistoryFlight && items.Count > 1)
         {
-            int idx = slotItem[i];
-            if (idx >= 0)
-                pool[i].Populate(items[idx].name, items[idx].drawing);
-            else
-                pool[i].SetEmpty();
-        }
-
-        pool[0].SetPose3D(new Vector3(slotPos.x, slotPos.y, depthPx * 0.06f), Vector3.zero, 0.94f, 0f);
-
-        // 3. Hero flies in from deep space, swinging round to face the viewer.
-        hero.gameObject.SetActive(true);
-        hero.Rect.SetAsLastSibling();
-        hero.Rect.sizeDelta = heroCardSize;
-        hero.Populate(item.name, item.drawing);
-        hero.PrepareReveal();
-        sparkRoot.SetAsLastSibling();
-
-        var from = new Vector3(-820f, -420f, depthPx * 0.9f);
-        var rest = new Vector3(0f, 30f, -depthPx * 0.1f);
-        var eulerFrom = new Vector3(-30f, 78f, 20f);
-
-        UiSfx.Whoosh();
-        yield return UITween.Run(flyInSeconds, t =>
-        {
-            float e = UITween.OutCubic(t);
-            Vector3 pos = Vector3.LerpUnclamped(from, rest, e);
-            pos.y += Mathf.Sin(t * Mathf.PI) * 170f;
-            Vector3 euler = Vector3.LerpUnclamped(eulerFrom, Vector3.zero, UITween.OutBack(t));
-            hero.SetPose3D(pos, euler, 1f, Mathf.Clamp01(t * 3.2f));
-            hero.Flash();
-        }, x => x);
-        Burst(rest, 14, 380f);
-        UiSfx.Burst(0.45f);
-
-        // 4. The handwriting is "scanned" onto the card by a light bar, shedding sparks.
-        UiSfx.Scan();
-        float sparkClock = 0f;
-        yield return UITween.Run(scanSeconds, t =>
-        {
-            float p = Mathf.Lerp(t, t * t * (3f - 2f * t), 0.65f);
-            hero.SetInkProgress(p);
-            hero.SetPose3D(rest + new Vector3(0f, Mathf.Sin(Time.unscaledTime * 1.7f) * 6f, Mathf.Sin(Time.unscaledTime * 1.1f) * depthPx * 0.01f),
-                Sway(1f), 1f, 1f);
-
-            sparkClock += Time.unscaledDeltaTime;
-            while (sparkClock > 0.022f && p > 0.01f && p < 0.99f)
+            var history = new List<PledgeHistoryEntry>();
+            for (int i = 0; i < arrivingIndex; i++)
             {
-                sparkClock -= 0.022f;
-                Vector3 at = sparkRoot.InverseTransformPoint(hero.ScanWorldPoint);
-                Emit(at, new Vector3(Random.Range(10f, 110f), Random.Range(-260f, 260f), Random.Range(-60f, 60f)),
-                    Random.Range(0.4f, 0.9f), SparkColors[Random.Range(0, 3)], Random.Range(3f, 7f));
+                var earlier = items[i];
+                history.Add(new PledgeHistoryEntry { name = earlier.name, drawing = earlier.drawing });
             }
+            if (history.Count > 0)
+            {
+                if (historyFlight == null) historyFlight = PledgeHistoryFlight.Create(transform.parent);
+                yield return historyFlight.Play(pool[1], history, depthPx, historyFlightSeconds, visibility =>
+                {
+                    for (int i = 0; i < slots; i++)
+                    {
+                        Vector2 position = DesignPosition(i);
+                        pool[i].SetPose(position, Vector3.zero, 1f, pool[i].RestingAlpha * (1f - visibility));
+                    }
+                }, pool.GetRange(0, slots), progress => revealFx.SetAnticipation(progress * 0.65f));
+            }
+        }
+        // Older pledges now frame an empty stage. Let the light breathe before
+        // creating the new card; nobody is shown in the center and then removed.
+        pool[0].SetEmpty();
+        pool[0].SetPose(slotPos,Vector3.zero,1f,0f);
+        revealFx.transform.SetAsLastSibling();
+        yield return UITween.Run(0.65f,t=>revealFx.SetAnticipation(0.65f+Mathf.Sin(t*Mathf.PI)*0.12f),x=>x);
+        yield return DimGrid(slots,DesignSize(1));
+        FillSlotsWithNewest(slots);
+        for(int i=0;i<slots;i++)
+        {
+            if(slotItem[i]>=0)pool[i].Populate(items[slotItem[i]].name,items[slotItem[i]].drawing);
+            else pool[i].SetEmpty();
+        }
+        pool[0].SetPose(slotPos,Vector3.zero,1,0);
 
-            if (p >= 0.99f)
-                sparkClock = 0f;
-        }, x => x);
-        hero.SetInkProgress(1f);
-
-        // 5. Name types in, then the card pulses with a burst.
-        int nameLength = string.IsNullOrEmpty(item.name) ? 0 : item.name.Length;
-        int lastShown = 0;
-        yield return UITween.Run(0.5f, t =>
+        // Anticipation: broken luminous arcs pull inward, then briefly tighten.
+        UiSfx.Scan();
+        yield return UITween.Run(chargeSeconds,t=>revealFx.SetState(t,Mathf.Lerp(0.65f,1f,Mathf.Sin(t*Mathf.PI*0.5f))),x=>x);
+        hero.gameObject.SetActive(true);hero.Rect.SetAsLastSibling();
+        hero.Rect.sizeDelta=DesignSize(0);hero.Populate(item.name,item.drawing);hero.SetNameProgress(0);
+        hero.SetInkBloom(0);
+        Vector3 rest=new Vector3(slotPos.x,slotPos.y,-depthPx*0.025f);
+        UiSfx.Whoosh();
+        // Spin strictly around the vertical axis. The card stays upright
+        // throughout its entrance and its lettering is revealed on the catch.
+        bool secondWhoosh=false, catchAccent=false;
+        yield return UITween.Run(flyInSeconds,t=>
+        {
+            Vector3 pos,euler;
+            float scale;
+            if(t<0.16f)
+            {
+                float e=UITween.InOutCubic(t/0.16f);
+                pos=rest+Vector3.Lerp(new Vector3(0,-85,depthPx*0.18f),new Vector3(0,20,depthPx*0.07f),e);
+                euler=new Vector3(0,Mathf.Lerp(-70,-145,e),0);
+                scale=Mathf.Lerp(0.2f,0.6f,e);
+            }
+            else if(t<0.76f)
+            {
+                float q=(t-0.16f)/0.6f;
+                float turn=1f-Mathf.Pow(1f-q,1.35f);
+                float sweep=UITween.OutCubic(q);
+                pos=rest+Vector3.Lerp(new Vector3(0,20,depthPx*0.07f),new Vector3(0,18,0),sweep);
+                euler=new Vector3(0,-145f+900f*turn,0);
+                scale=Mathf.Lerp(0.6f,1.06f,sweep);
+            }
+            else
+            {
+                float q=(t-0.76f)/0.24f;
+                float e=UITween.OutBack(q);
+                pos=rest+new Vector3(0,Mathf.LerpUnclamped(18,0,e),0);
+                euler=new Vector3(0,Mathf.LerpUnclamped(755,720,e),0);
+                scale=Mathf.LerpUnclamped(1.06f,1f,e);
+            }
+            hero.SetPose3D(pos,euler,scale,Mathf.Clamp01(t*10f));
+            hero.SetInkBloom(Mathf.SmoothStep(0,1,Mathf.InverseLerp(0.80f,0.98f,t)));
+            revealFx.SetState(0.9f+t*1.9f,1f-t*0.65f);
+            if(!secondWhoosh && t>0.45f){secondWhoosh=true;UiSfx.Swoop();hero.Flash();}
+            if(!catchAccent && t>0.76f){catchAccent=true;UiSfx.Burst(0.22f);hero.Flash();}
+        },x=>x);
+        hero.SetPose3D(rest,Vector3.zero,1f,1f);
+        hero.SetInkBloom(1);hero.Flash();UiSfx.Burst(0.4f);
+        yield return UITween.Run(0.34f,t=>
         {
             hero.SetNameProgress(t);
-            int shown = Mathf.CeilToInt(nameLength * t);
-            if (shown != lastShown)
-            {
-                lastShown = shown;
-                UiSfx.Tick();
-            }
-
-            hero.SetPose3D(rest, Sway(1f), 1f, 1f);
-        }, x => x);
-        hero.SetNameProgress(1f);
-        hero.Flash();
-        Burst(hero.Rect.anchoredPosition3D, 46, 620f);
-        UiSfx.Burst();
-
-        yield return UITween.Run(holdSeconds, t =>
+            hero.SetPose3D(rest,Vector3.zero,1,1);
+            revealFx.SetState(1,0.65f);
+        },x=>x);
+        hero.SetNameProgress(1);revealFx.SetState(1,0.65f);
+        // Let the handwriting breathe; subtle counter-rotation makes the glass feel suspended.
+        yield return UITween.Run(holdSeconds,t=>
         {
-            float punch = 1f + 0.075f * Mathf.Sin(Mathf.Min(t * 3.2f, 1f) * Mathf.PI) * Mathf.Exp(-1.5f * t);
-            hero.SetPose3D(rest + new Vector3(0f, Mathf.Sin(Time.unscaledTime * 1.7f) * 6f, 0f), Sway(1.15f), punch, 1f);
-        }, x => x);
-
-        // 6. Swoop into its place on the wall.
-        Vector3 startPos = hero.Rect.anchoredPosition3D;
-        bool restored = false;
-        UiSfx.Swoop();
-        yield return UITween.Run(swoopSeconds, t =>
+            hero.SetPose3D(rest+new Vector3(0,Mathf.Sin(t*Mathf.PI*2)*4,0),Vector3.zero,1,1);
+            revealFx.SetState(1,0.65f);
+        },x=>x);
+        UiSfx.Swoop();RestoreGrid(slots,DesignSize(1));
+        // Magnetic docking: a short upward anticipation, then a restrained elastic settle.
+        yield return UITween.Run(swoopSeconds,t=>
         {
-            float e = UITween.InOutCubic(t);
-            float arc = Mathf.Sin(t * Mathf.PI);
-            Vector3 pos = Vector3.Lerp(startPos, new Vector3(slotPos.x, slotPos.y, 0f), e);
-            pos.y += arc * 120f;
-            pos.z = Mathf.Lerp(startPos.z, 0f, e) - arc * depthPx * 0.09f;
-            Vector3 euler = new Vector3(-arc * 10f, -arc * 20f, arc * 6f) + Sway(1f - e);
-            hero.Rect.sizeDelta = Vector2.Lerp(heroCardSize, cardSize, e);
-            hero.SetPose3D(pos, euler, 1f, 1f);
-
-            if (!restored && t > 0.5f)
-            {
-                restored = true;
-                RestoreGrid(slots, cardSize);
-            }
-        }, x => x);
-
-        // 7. Land: swap hero for the real grid card, ripple, settle.
-        pool[0].ShowLanded(slotPos, cardSize);
-        HideHero();
-        UiSfx.Land();
-        Burst(new Vector3(slotPos.x, slotPos.y, 0f), 22, 320f);
-
-        yield return new WaitForSecondsRealtime(0.9f);
+            float e=UITween.OutCubic(t);
+            Vector3 pos=Vector3.Lerp(rest,new Vector3(slotPos.x,slotPos.y,0),e);
+            pos.y+=Mathf.Sin(t*Mathf.PI)*-18;
+            hero.SetPose3D(pos,Vector3.zero,1+Mathf.Sin(t*Mathf.PI)*0.025f,1);
+            revealFx.SetState(1,0.65f);
+        },x=>x);
+        pool[0].ShowLanded(slotPos,DesignSize(0));HideHero();UiSfx.Land();
+        revealFx.transform.SetAsLastSibling();
+        pool[0].HighlightFor(6f);
+        revealFx.BeginAfterglow(pool[0],6f);
+        yield return new WaitForSecondsRealtime(0.35f);
     }
 
     private IEnumerator DimGrid(int slots, Vector2 cardSize)
@@ -555,12 +586,12 @@ public class WallBoard : MonoBehaviour
                 bool active = i < slots;
                 Vector2 target = GridPosition(i, slots);
                 PledgeCard card = pool[i];
-                card.Rect.sizeDelta = Vector2.Lerp(startSize[i], cardSize, t);
+                card.Rect.sizeDelta = Vector2.Lerp(startSize[i], DesignSize(i), t);
                 card.SetPose3D(
                     Vector3.Lerp(startPos[i], new Vector3(target.x, target.y, depthPx * 0.06f), t),
                     Vector3.zero,
                     Mathf.Lerp(startScale[i], 0.94f, t),
-                    Mathf.Lerp(startAlpha[i], active ? 0.2f : 0f, t));
+                    Mathf.Lerp(startAlpha[i], active && i > 0 ? 0.2f : 0f, t));
             }
         }, UITween.InOutCubic);
     }
@@ -571,74 +602,33 @@ public class WallBoard : MonoBehaviour
         for (int i = 1; i < slots; i++)
         {
             int distance = (i % cols) + (i / cols);
-            pool[i].RestoreFromDim(GridPosition(i, slots), cardSize, 0.07f * distance);
+            pool[i].RestoreFromDim(GridPosition(i, slots), DesignSize(i), 0.085f * i);
         }
     }
 
     private IEnumerator IdleFlip()
     {
         int slots = SlotCount;
-        if (items.Count == 0)
-            yield break;
-
-        int flips = Mathf.Clamp(slots / 3, 2, 4);
-        var order = new List<int>(slots);
-        for (int i = 0; i < slots; i++)
-            order.Add(i);
+        // Snapshot hidden entries before replacing any slot. A card leaving this
+        // batch must not immediately reappear elsewhere in the same batch.
+        var hidden = new List<int>();
+        for(int i=0;i<items.Count;i++)
+            if(!IsOnScreen(i))hidden.Add(i);
+        hidden.Sort((a,b)=>items[a].lastShownStamp.CompareTo(items[b].lastShownStamp));
+        var order = new List<int>();
+        for(int i=0;i<slots;i++)
+            if(!pool[i].IsHighlighted)order.Add(i);
         Shuffle(order);
-
-        int done = 0;
-        for (int n = 0; n < order.Count && done < flips; n++)
+        int count = Mathf.Min(2,Mathf.Min(hidden.Count,order.Count));
+        for(int i=0;i<count;i++)
         {
-            int slot = order[n];
-            int next = NextHiddenItem(slotItem[slot]);
-            if (next < 0)
-                continue;
-
-            AssignSlot(slot, next);
-            Item item = items[next];
-            pool[slot].FlipTo(item.name, item.drawing, done * 0.12f);
-            done++;
+            int slot=order[i],next=hidden[i];
+            AssignSlot(slot,next);
+            Item item=items[next];
+            pool[slot].FlipTo(item.name,item.drawing,i*0.12f);
         }
-
         yield return new WaitForSecondsRealtime(1.1f);
-        idleRoutine = null;
-    }
-
-    private int NextHiddenItem(int current)
-    {
-        int best = -1;
-        int bestStamp = int.MaxValue;
-        for (int i = 0; i < items.Count; i++)
-        {
-            if (IsOnScreen(i) && i != current)
-                continue;
-            if (i == current)
-                continue;
-
-            int stamp = items[i].lastShownStamp;
-            if (stamp < bestStamp)
-            {
-                bestStamp = stamp;
-                best = i;
-            }
-        }
-
-        if (best < 0 && items.Count > 1)
-        {
-            for (int i = 0; i < items.Count; i++)
-            {
-                if (i == current)
-                    continue;
-                if (items[i].lastShownStamp < bestStamp)
-                {
-                    bestStamp = items[i].lastShownStamp;
-                    best = i;
-                }
-            }
-        }
-
-        return best;
+        idleRoutine=null;
     }
 
     private bool IsOnScreen(int itemIndex)
@@ -691,7 +681,7 @@ public class WallBoard : MonoBehaviour
             }
 
             Vector2 slot = GridPosition(i, slots);
-            card.ReleaseToGrid(slot, size);
+            card.ReleaseToGrid(slot, DesignSize(i));
             int itemIndex = slotItem[i];
             if (itemIndex >= 0)
             {
@@ -721,49 +711,23 @@ public class WallBoard : MonoBehaviour
             slotItem[i] = -1;
     }
 
-    private void GetLayout(int slots, out Vector2 cardSize, out int cols, out int rows)
+    public static Vector2 DesignPosition(int index)
     {
-        if (slots <= 6)
+        switch(index)
         {
-            cols = 3;
-            rows = 2;
+            case 0: return new Vector2(-0.04f,-17.54f);
+            case 1: return new Vector2(-720.76f,169.24f);
+            case 2: return new Vector2(-507.28f,-244.28f);
+            case 3: return new Vector2(700.70f,164.80f);
+            default: return new Vector2(527.24f,-283.28f);
         }
-        else if (slots <= 8)
-        {
-            cols = 4;
-            rows = 2;
-        }
-        else if (slots <= 9)
-        {
-            cols = 3;
-            rows = 3;
-        }
-        else
-        {
-            cols = 4;
-            rows = 3;
-        }
-
-        const float usableW = 1680f;
-        const float usableH = 860f;
-        float cellW = usableW / cols;
-        float cellH = usableH / rows;
-        cardSize = new Vector2(cellW - gridGap, cellH - gridGap);
     }
-
-    private Vector2 GridPosition(int index, int slots)
+    public static Vector2 DesignSize(int index) => index == 0 ? new Vector2(768.24f,768.12f) : new Vector2(585.84f,585.6f);
+    private void GetLayout(int slots,out Vector2 size,out int cols,out int rows)
     {
-        GetLayout(slots, out _, out int cols, out int rows);
-        const float usableW = 1680f;
-        const float usableH = 860f;
-        float cellW = usableW / cols;
-        float cellH = usableH / rows;
-        int col = index % cols;
-        int row = index / cols;
-        float x = (col - (cols - 1) * 0.5f) * cellW;
-        float y = ((rows - 1) * 0.5f - row) * cellH;
-        return new Vector2(x, y);
+        size=DesignSize(1); cols=3; rows=2;
     }
+    private Vector2 GridPosition(int index,int slots) => DesignPosition(index);
 
     private PledgeCard GetHero()
     {

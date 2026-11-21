@@ -14,6 +14,7 @@ public class HostIpPanel : MonoBehaviour
     private RectTransform _panel;
     private TMP_InputField _input;
     private TMP_Text _status;
+    private string displayedConnectionStatus;
 
     private void Awake()
     {
@@ -71,11 +72,20 @@ public class HostIpPanel : MonoBehaviour
             _input.ActivateInputField();
         }
 
-        SetStatus(network != null && network.IsConnected
-            ? "Connected. Tap Config again if you need to change the IP."
-            : "Both ethernet cables must be on the same network. With no router, set this tablet's Ethernet IP to "
-              + WindowsLanSetup.DirectTabletIp + ", mask 255.255.255.0, gateway blank. The wall PC is "
-              + WindowsLanSetup.DirectWallIp + ".");
+        displayedConnectionStatus = network != null ? network.ConnectionStatus : "Network controller is missing.";
+        SetStatus(displayedConnectionStatus);
+    }
+
+    private void LateUpdate()
+    {
+        // This dialog used to keep its own 'Saving ... and connecting' string
+        // forever, even after Netcode had successfully connected underneath it.
+        if (_panel != null && _panel.gameObject.activeInHierarchy && network != null &&
+            displayedConnectionStatus != network.ConnectionStatus)
+        {
+            displayedConnectionStatus = network.ConnectionStatus;
+            SetStatus(displayedConnectionStatus);
+        }
     }
 
     private void SetStatus(string message)

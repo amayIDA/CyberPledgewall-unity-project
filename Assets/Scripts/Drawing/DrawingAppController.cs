@@ -12,10 +12,18 @@ public class DrawingAppController : MonoBehaviour
     [SerializeField] private TMP_Text statusText;
 
     private DrawingConfig config;
-    private Coroutine waitRoutine;
-    private bool reconnectBusy;
-    private string attemptingHost;
-    private bool resumeReconnect;
+    private NetworkManager subscribedManager;
+    private bool started;
+    private bool paused;
+    private bool quitting;
+    private bool connecting;
+    private bool resetRequested;
+    private float nextAttempt;
+    private float connectionDeadline;
+    private const float RetrySeconds = 3f;
+    private const float ConnectTimeoutSeconds = 10f;
+
+    public string ConnectionStatus { get; private set; } = "Enter the wall PC IP and tap Connect.";
 
     public bool IsConnected => NetworkManager.Singleton != null && NetworkManager.Singleton.IsConnectedClient;
     public string CurrentHost => config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
@@ -41,235 +49,178 @@ public class DrawingAppController : MonoBehaviour
 
     private void Start()
     {
-        var nm = NetworkManager.Singleton;
-        if (nm == null)
-        {
-            SetStatus("NetworkManager is missing.");
-            return;
-        }
-
-        nm.OnClientConnectedCallback += HandleClientConnected;
-        nm.OnClientDisconnectCallback += HandleClientDisconnected;
-
+        started = true;
+        SubscribeNetwork();
         if (GetComponent<WallBeaconClient>() == null)
             gameObject.AddComponent<WallBeaconClient>();
+        nextAttempt = Time.realtimeSinceStartup + 1.5f;
+    }
 
-        StartCoroutine(AutoConnectLoop());
+    private void OnEnable()
+    {
+        if (started)
+        {
+            SubscribeNetwork();
+            resetRequested = true;
+        }
+    }
+
+    private void SubscribeNetwork()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || subscribedManager == nm)
+            return;
+        UnsubscribeNetwork();
+        subscribedManager = nm;
+        nm.OnClientConnectedCallback += HandleClientConnected;
+        nm.OnClientDisconnectCallback += HandleClientDisconnected;
+    }
+
+    private void UnsubscribeNetwork()
+    {
+        if (subscribedManager != null)
+        {
+            subscribedManager.OnClientConnectedCallback -= HandleClientConnected;
+            subscribedManager.OnClientDisconnectCallback -= HandleClientDisconnected;
+        }
+        subscribedManager = null;
     }
 
     private void Update()
     {
-        if (!WallBeaconClient.HasFound)
+        if (!started || paused || quitting)
             return;
 
-        UseDiscoveredHost(WallBeaconClient.FoundIp, WallBeaconClient.FoundPort);
-    }
+        SubscribeNetwork();
+        if (WallBeaconClient.HasFound)
+            UseDiscoveredHost(WallBeaconClient.FoundIp, WallBeaconClient.FoundPort);
 
-    private System.Collections.IEnumerator AutoConnectLoop()
-    {
-        const float interval = 60f;
-        yield return new WaitForSecondsRealtime(1.5f);
-        while (true)
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.IsServer)
+            return;
+
+        // Lifecycle and UI events only request recovery. Shutdown/start happen here,
+        // outside Netcode callbacks, and only after the previous shutdown finishes.
+        if (resetRequested)
         {
-            config = AppConfig.LoadDrawing();
-            EnsureConnected();
-            yield return new WaitForSecondsRealtime(interval);
+            resetRequested = false;
+            connecting = false;
+            if (!nm.ShutdownInProgress && (nm.IsListening || nm.IsClient))
+                nm.Shutdown();
+            nextAttempt = Time.realtimeSinceStartup + 1f;
         }
-    }
+        if (nm.ShutdownInProgress)
+            return;
+        if (nm.IsConnectedClient)
+            return;
 
-    private void OnApplicationPause(bool paused)
-    {
-        if (paused)
+        float now = Time.realtimeSinceStartup;
+        if (connecting)
         {
-            resumeReconnect = true;
+            if (now < connectionDeadline)
+                return;
+            connecting = false;
+            nm.Shutdown();
+            nextAttempt = now + RetrySeconds;
+            SetStatus($"Could not reach wall at {CurrentHost}. Retrying automatically...");
             return;
         }
+        if (now < nextAttempt)
+            return;
+        if (nm.IsListening || nm.IsClient)
+        {
+            nm.Shutdown();
+            nextAttempt = now + RetrySeconds;
+            return;
+        }
+        if (config == null || !AppConfig.IsRealHost(config.hostAddress))
+            return;
+
+        string ip = config.hostAddress;
+        var session = nm.GetComponent<NetworkSession>();
+        if (session != null)
+        {
+            session.SetPort(config.port);
+            session.ConfigureAsClient(ip);
+        }
+        else
+            nm.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>()?.SetConnectionData(ip, config.port);
+
+        SetStatus($"Connecting to {ip}:{config.port}...");
+        nextAttempt = now + RetrySeconds;
+        connecting = nm.StartClient();
+        connectionDeadline = now + ConnectTimeoutSeconds;
+        if (!connecting)
+            SetStatus("Could not start connection. Retrying automatically...");
+    }
+
+    private void OnApplicationPause(bool isPaused)
+    {
+        paused = isPaused;
+        if (isPaused)
+            return;
 
         DrawingKiosk.KeepScreenOn();
-        if (resumeReconnect)
-        {
-            resumeReconnect = false;
-            StartCoroutine(Reconnect());
-        }
+        // Android may have suspended heartbeats while the PC dropped this client.
+        // Discard even a locally 'connected' transport and use the saved endpoint.
+        config = AppConfig.LoadDrawing();
+        resetRequested = true;
     }
 
     private void OnApplicationFocus(bool hasFocus)
     {
         if (!hasFocus)
-        {
-            resumeReconnect = true;
             return;
-        }
-
         DrawingKiosk.KeepScreenOn();
-        if (resumeReconnect)
-        {
-            resumeReconnect = false;
-            StartCoroutine(Reconnect());
-        }
+        // Focus also changes for the keyboard/dialogs. Don't tear down a healthy
+        // connection here or race the pause/resume recovery request.
+        if (!IsConnected)
+            nextAttempt = Time.realtimeSinceStartup;
     }
 
-    private void EnsureConnected()
-    {
-        if (reconnectBusy)
-            return;
-
-        if (config == null || !AppConfig.IsRealHost(config.hostAddress))
-            return;
-
-        var nm = NetworkManager.Singleton;
-        if (nm == null)
-            return;
-
-        if (nm.IsConnectedClient)
-            return;
-
-        Debug.Log("Wall connection check: not connected, reconnecting to " + config.hostAddress);
-        if (nm.IsListening)
-        {
-            StartCoroutine(Reconnect());
-            return;
-        }
-
-        ConnectToWall();
-    }
+    private void OnApplicationQuit() => quitting = true;
 
     private void OnDisable()
     {
+        UnsubscribeNetwork();
         if (subscribedAck)
         {
             WallReceiver.PledgeAccepted -= OnPledgeAccepted;
             subscribedAck = false;
         }
-
-        if (NetworkManager.Singleton == null)
-            return;
-
-        NetworkManager.Singleton.OnClientConnectedCallback -= HandleClientConnected;
-        NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnected;
     }
 
     public void ConnectToWall()
     {
-        var nm = NetworkManager.Singleton;
-        if (nm == null)
-        {
-            SetStatus("NetworkManager is missing.");
-            return;
-        }
-
-        if (nm.IsConnectedClient)
-            return;
-
-        if (nm.IsListening)
-        {
-            StartCoroutine(Reconnect());
-            return;
-        }
-
-        string ip = config != null && !string.IsNullOrEmpty(config.hostAddress) ? config.hostAddress : "127.0.0.1";
-        ushort port = config != null ? config.port : NetworkSession.DefaultPort;
-        attemptingHost = ip;
-
-        var session = nm.GetComponent<NetworkSession>();
-        if (session != null)
-        {
-            session.SetPort(port);
-            session.ConfigureAsClient(ip);
-        }
-        else
-            nm.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>()?.SetConnectionData(ip, port);
-
-        SetStatus($"Connecting to {ip}:{port}...");
-        if (!nm.StartClient())
-        {
-            SetStatus("Failed to start client.");
-            return;
-        }
-
-        if (waitRoutine != null)
-            StopCoroutine(waitRoutine);
-        waitRoutine = StartCoroutine(WaitForConnection(ip, port));
-    }
-
-    private System.Collections.IEnumerator WaitForConnection(string ip, ushort port)
-    {
-        float timeout = 5f;
-        float elapsed = 0f;
-        var nm = NetworkManager.Singleton;
-        while (nm != null && !nm.IsConnectedClient && elapsed < timeout)
-        {
-            elapsed += Time.deltaTime;
-            yield return null;
-        }
-
-        if (nm != null && nm.IsConnectedClient)
-            yield break;
-
-        if (nm != null && nm.IsListening)
-            nm.Shutdown();
-
-        SetStatus($"Could not reach wall at {ip}:{port}. " + WindowsLanSetup.DirectCableInstructions);
+        if (!IsConnected && !connecting)
+            nextAttempt = Time.realtimeSinceStartup;
     }
 
     private void UseDiscoveredHost(string ip, ushort port)
     {
-        if (string.IsNullOrEmpty(ip) || reconnectBusy)
+        if (string.IsNullOrEmpty(ip))
             return;
-        if (config != null && AppConfig.IsRealHost(config.hostAddress) && config.hostAddress != ip)
-            return;
-        if (IsConnected && CurrentHost == ip)
-            return;
-
-        var nm = NetworkManager.Singleton;
-        if (attemptingHost == ip && nm != null && nm.IsListening)
-            return;
-
         if (config == null)
             config = AppConfig.LoadDrawing();
+        if (AppConfig.IsRealHost(config.hostAddress) && config.hostAddress != ip)
+            return;
+        if (config.hostAddress == ip && config.port == port)
+            return;
 
-        bool changed = config.hostAddress != ip || config.port != port;
         config.hostAddress = ip;
         config.port = port;
-        if (changed)
-            AppConfig.SaveDrawing(config);
-
-        if (nm != null && nm.IsListening)
-        {
-            StartCoroutine(Reconnect());
-            return;
-        }
-
-        ConnectToWall();
+        AppConfig.SaveDrawing(config);
+        resetRequested = true;
     }
 
     public void ApplyHostAddress(string ip)
     {
         if (config == null)
             config = AppConfig.LoadDrawing();
-
         config.hostAddress = string.IsNullOrWhiteSpace(ip) ? "127.0.0.1" : ip.Trim();
         AppConfig.SaveDrawing(config);
-        StartCoroutine(Reconnect());
-    }
-
-    private System.Collections.IEnumerator Reconnect()
-    {
-        reconnectBusy = true;
-        var nm = NetworkManager.Singleton;
-        if (nm != null && (nm.IsListening || nm.IsConnectedClient))
-            nm.Shutdown();
-
-        float timeout = 2f;
-        float elapsed = 0f;
-        while (nm != null && nm.IsListening && elapsed < timeout)
-        {
-            elapsed += Time.unscaledDeltaTime;
-            yield return null;
-        }
-
-        ConnectToWall();
-        reconnectBusy = false;
+        SetStatus($"Connecting to {config.hostAddress}:{config.port}...");
+        resetRequested = true;
     }
 
     private readonly System.Collections.Generic.HashSet<string> acknowledged = new System.Collections.Generic.HashSet<string>();
@@ -339,12 +290,20 @@ public class DrawingAppController : MonoBehaviour
     private void HandleClientConnected(ulong clientId)
     {
         if (NetworkManager.Singleton != null && clientId == NetworkManager.Singleton.LocalClientId)
+        {
+            connecting = false;
+            AppConfig.SaveDrawing(config);
             SetStatus("Connected to wall.");
+        }
     }
 
     private void HandleClientDisconnected(ulong clientId)
     {
         if (NetworkManager.Singleton == null || clientId != NetworkManager.Singleton.LocalClientId)
+            return;
+
+        // Intentional recovery shutdown already has its next attempt scheduled.
+        if (NetworkManager.Singleton.ShutdownInProgress)
             return;
 
         string reason = NetworkManager.Singleton.DisconnectReason;
@@ -353,12 +312,13 @@ public class DrawingAppController : MonoBehaviour
         else
             SetStatus($"Disconnected: {reason}");
 
-        if (!reconnectBusy)
-            StartCoroutine(Reconnect());
+        connecting = false;
+        nextAttempt = Time.realtimeSinceStartup + RetrySeconds;
     }
 
     public void SetStatus(string message)
     {
+        ConnectionStatus = message;
         Debug.Log(message);
         if (statusText != null)
             statusText.text = message;

@@ -77,8 +77,7 @@ public class DrawingFlow : MonoBehaviour
         if (clearButton != null) clearButton.onClick.AddListener(() => drawing.Clear());
         if (undoButton != null) undoButton.onClick.AddListener(() => drawing.Undo());
 
-        nameField.Input.onSubmit.AddListener(_ => employeeField.Input.ActivateInputField());
-        employeeField.Input.onSubmit.AddListener(_ => SubmitRegistration());
+        nameField.Input.onSubmit.AddListener(_ => SubmitRegistration());
 
         var register = screens != null && screens.Length > (int)Step.Register ? screens[(int)Step.Register] : null;
         if (register != null && register.GetComponent<KeyboardAvoider>() == null)
@@ -140,7 +139,7 @@ public class DrawingFlow : MonoBehaviour
             return;
 
         bool nameOk = !string.IsNullOrWhiteSpace(nameField.Input.text);
-        bool idOk = !string.IsNullOrWhiteSpace(employeeField.Input.text);
+        bool idOk = employeeField == null || !string.IsNullOrWhiteSpace(employeeField.Input.text);
         if (!nameOk) nameField.Reject();
         if (!idOk) employeeField.Reject();
         if (!nameOk || !idOk)
@@ -149,7 +148,7 @@ public class DrawingFlow : MonoBehaviour
             return;
         }
 
-        VisitorLog.Append(nameField.Input.text, employeeField.Input.text);
+        VisitorLog.Append(nameField.Input.text, employeeField != null ? employeeField.Input.text : string.Empty);
         GoTo(Step.Draw);
     }
 
@@ -176,7 +175,7 @@ public class DrawingFlow : MonoBehaviour
         sending = true;
         sendButton.interactable = false;
 
-        if (!network.TrySubmit(nameField.Input.text.Trim(), employeeField.Input.text.Trim(), out string pledgeId, out _))
+        if (!network.TrySubmit(nameField.Input.text.Trim(), employeeField != null ? employeeField.Input.text.Trim() : string.Empty, out string pledgeId, out _))
         {
             // The wall isn't reachable: try to reconnect, keep the drawing, and tell the visitor.
             network.ConnectToWall();
@@ -233,7 +232,7 @@ public class DrawingFlow : MonoBehaviour
         if (next == Step.Welcome)
         {
             nameField.Input.text = string.Empty;
-            employeeField.Input.text = string.Empty;
+            if (employeeField != null) employeeField.Input.text = string.Empty;
             drawing.Clear(true);
         }
 

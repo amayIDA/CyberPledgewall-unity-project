@@ -23,12 +23,18 @@ public static class DrawingKiosk
         {
             using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
             using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
-            using (var window = activity.Call<AndroidJavaObject>("getWindow"))
             {
-                const int flagKeepScreenOn = 128;
                 activity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
                 {
-                    window.Call("addFlags", flagKeepScreenOn);
+                    // Acquire JNI wrappers inside the queued callback: wrappers
+                    // captured from outside may already be disposed when it runs.
+                    using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                    using (var current = player.GetStatic<AndroidJavaObject>("currentActivity"))
+                    using (var window = current.Call<AndroidJavaObject>("getWindow"))
+                    {
+                        const int flagKeepScreenOn = 128;
+                        window.Call("addFlags", flagKeepScreenOn);
+                    }
                 }));
             }
         }
